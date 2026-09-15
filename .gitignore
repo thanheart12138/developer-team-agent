@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pypackages__/
+vendor/
+workspace/
+
+# Build outputs and caches
+dist/
+build/
+out/
+target/
+coverage/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.next/
+.nuxt/
+
+# Environment files
+.env*
+secrets/
+
+# Operating system files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Editor configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# AI local configuration
+.codex/
+.claude/
+.cursor/
+.agents/
+.aider*
