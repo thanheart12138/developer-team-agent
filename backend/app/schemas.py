@@ -22,7 +22,7 @@ class TaskResponse(BaseModel):
 
 
 class CreateEventRequest(BaseModel):
-    type: Literal["user_message", "document_approval", "acceptance_result"]
+    type: Literal["user_message", "document_approval", "acceptance_result", "change_request"]
     data: dict
 
 

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import SessionLocal
-from ..models import Event, EventStatus, Message, Step, StepRun, StepStatus, Task, TaskStatus
+from ..models import Event, EventStatus, Message, Step, StepRun, StepStatus, Task, TaskStatus, TraceRecord
 from .contracts import ModelRequest, ToolCall, ToolResult
 from .model import ModelProtocolError, create_model_runtime
 from .tools import TOOL_SCHEMAS, ToolRuntime
@@ -30,12 +30,20 @@ NEXT_STEP = {
     Step.test: Step.start_product,
     Step.start_product: Step.verify_product,
 }
+FIXED_PRODUCT_CONSTRAINTS = [
+    "原生 HTML、CSS、JavaScript 单模块软件", "使用 Node 内置测试框架",
+    "使用 Python Playwright 验证真实浏览器", "本地 HTTP 启动与健康检查",
+    "本地 HTTP 服务仅用于 Worker 预览和验证，不是生成产品的外部接口或主动网络请求",
+    "不引入生成产品依赖或数据存储",
+]
 MAX_MODEL_CALLS_PER_STEP = 100
 MAX_TRANSPORT_ATTEMPTS = 3
 MAX_REPAIR_ROUNDS = 3
 MAX_NO_CHANGE_CORRECTIONS = 2
 MAX_IDENTICAL_TOOL_ACTIONS = 2
 MAX_REPAIR_ACTIONS_WITHOUT_WRITE = 5
+MAX_BUG_PLANNER_DECISIONS = 12
+MAX_BUG_EXTRA_INSPECTIONS = 3
 
 BASE_INSTRUCTIONS = """你是开发团队模拟器中的执行 Agent。严格完成当前 Step，不改变已确认需求、技术栈或流程。
 你只能通过提供的工具读写当前任务工作区；不得访问工作区外资源。文件操作必须使用相对路径。
@@ -265,8 +273,8 @@ def unified_text_diff(previous: str, current: str, previous_name: str, current_n
     ))
 
 
-def parse_transition_decision(text: str) -> dict:
-    # 解析并校验设计阶段 Transition Planner 的动作。
+def parse_transition_decision(text: str, kind: str, required_update: bool = False) -> dict:
+    # 将设计阶段 Planner 的具体下一行动映射为现有文档执行器的修订或复用。
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -274,15 +282,24 @@ def parse_transition_decision(text: str) -> dict:
         value = json.loads(cleaned)
     except (json.JSONDecodeError, IndexError):
         value = {}
-    action = value.get("action")
+    next_action = value.get("action")
     confidence = value.get("confidence", 0)
-    if action not in {"revise", "reuse", "clarify"} or not isinstance(confidence, (int, float)):
+    revise_action = "update_architecture" if kind == "architecture" else "update_dev_design"
+    reuse_action = "update_dev_design" if kind == "architecture" else "modify_code"
+    if next_action == revise_action:
+        action = "revise"
+    elif next_action == reuse_action and not required_update:
+        action = "reuse"
+    else:
+        action = "clarify"
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
         action = "clarify"
         confidence = 0
     if confidence < 0.7:
         action = "clarify"
     return {
         "action": action,
+        "next_action": next_action if action != "clarify" else "clarify",
         "reason": str(value.get("reason", "证据不足，无法安全决定下一步")),
         "affected_sections": value.get("affected_sections")
         if isinstance(value.get("affected_sections"), list) else [],
@@ -518,6 +535,170 @@ def fail_or_repair(db: Session, task: Task, run: StepRun, reason: str):
     db.commit()
 
 
+def product_code_hashes(task: Task) -> dict[str, str]:
+    # 取得会影响测试和浏览器行为的当前产品代码哈希，用于防止复用旧验证结果。
+    root = workspace_for(task)
+    return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted((root / "product").rglob("*"))
+            if path.is_file() and path.suffix in {".html", ".css", ".js", ".py"}}
+
+
+def skipped_design_evidence(task: Task) -> dict[str, dict]:
+    # 取得缺省设计文档对应的最近跳过理由，供开发返修和验收规划使用。
+    root = workspace_for(task)
+    skipped = {}
+    for path in sorted((root / "evidence").glob("initial-*-decision-v*.json")):
+        decision = json.loads(path.read_text(encoding="utf-8"))
+        for name in decision.get("skipped_documents", []):
+            if not (root / "docs" / name).is_file():
+                skipped[name] = {"reason": decision.get("reason"),
+                                 "evidence": decision.get("evidence", []),
+                                 "product_hash_when_decided": decision.get("document_hashes", {}).get("product"),
+                                 "decision_path": str(path.relative_to(root))}
+    return skipped
+
+
+def active_bug_triage(task: Task) -> dict:
+    # 识别最近一次已确认的现有产品变更，避免影响新建任务原流程。
+    root = workspace_for(task)
+    files = list((root / "evidence").glob("acceptance-triage-*.json"))
+    if not files:
+        return {}
+    latest = max(files, key=lambda path: int(path.stem.rsplit("-", 1)[-1]))
+    triage = json.loads(latest.read_text(encoding="utf-8"))
+    return triage if triage.get("classification") in {
+        "implementation_defect", "requirement_change", "architecture_defect", "dev_design_defect"
+    } and triage.get("planner_action") in {
+        "update_requirement", "update_architecture", "update_dev_design", "modify_code"
+    } else {}
+
+
+def bug_verified_ready(db: Session, task: Task) -> bool:
+    # 检查同一份代码已经通过测试与浏览器验证，供 finish 门径使用。
+    root = workspace_for(task)
+    tested = root / "evidence" / "bug-tested-code-hashes.json"
+    verified = root / "evidence" / "bug-verified-code-hashes.json"
+    last_verify = db.scalar(select(StepRun).where(
+        StepRun.task_id == task.id, StepRun.step == Step.verify_product,
+        StepRun.status == StepStatus.succeeded).order_by(StepRun.id.desc()).limit(1))
+    last_develop = db.scalar(select(StepRun).where(
+        StepRun.task_id == task.id, StepRun.step == Step.develop,
+        StepRun.status == StepStatus.succeeded).order_by(StepRun.id.desc()).limit(1))
+    if not last_verify or not last_develop or last_verify.id < last_develop.id \
+            or not tested.is_file() or not verified.is_file() or not task.result_url:
+        return False
+    current = product_code_hashes(task)
+    return (json.loads(tested.read_text(encoding="utf-8")) == current
+            and json.loads(verified.read_text(encoding="utf-8")) == current)
+
+
+def plan_bug_action(db: Session, task: Task, run: StepRun, tools: ToolRuntime) -> str:
+    # 根据已确认的现有产品变更和真实执行结果规划下一行动，程序负责校验和执行。
+    triage = active_bug_triage(task)
+    event_id = triage["event_id"]
+    root = workspace_for(task)
+    decisions = [trace for trace in db.scalars(select(TraceRecord).where(
+        TraceRecord.task_id == task.id, TraceRecord.type == "bug_planner_decision")).all()
+                 if trace.metadata_json.get("event_id") == event_id]
+    if len(decisions) >= MAX_BUG_PLANNER_DECISIONS:
+        raise RuntimeError("bug_planner_decision_limit_exceeded")
+    inspections = [trace for trace in db.scalars(select(TraceRecord).where(
+        TraceRecord.task_id == task.id, TraceRecord.type == "bug_planner_inspect")).all()
+                   if trace.metadata_json.get("event_id") == event_id]
+    candidates = [f"evidence/{name}" for name in ("test-report.md", "verification-report.md")
+                  if (root / "evidence" / name).is_file()]
+    candidates += sorted(str(path.relative_to(root)) for path in (root / "product").rglob("*")
+                         if path.is_file())
+    previous_hashes = {**triage.get("inspected_evidence", {}),
+                       **{trace.metadata_json["path"]: trace.metadata_json["sha256"]
+                          for trace in inspections if trace.status == "succeeded"}}
+    remaining_files = [path for path in candidates if previous_hashes.get(path) !=
+                       hashlib.sha256((root / path).read_bytes()).hexdigest()]
+    if task.cur_step == Step.develop:
+        allowed = ["modify_code"]
+    elif task.cur_step == Step.test:
+        # 新修改尚无正式测试结果时先运行原失败用例，避免基于旧报告反复改代码。
+        allowed = ["run_test"]
+    elif task.cur_step == Step.start_product:
+        tested = root / "evidence" / "bug-tested-code-hashes.json"
+        if not tested.is_file() or json.loads(tested.read_text(encoding="utf-8")) != product_code_hashes(task):
+            raise RuntimeError("bug_test_evidence_stale")
+        allowed = ["start_product"]
+    elif task.cur_step == Step.verify_product:
+        allowed = ["finish"] if bug_verified_ready(db, task) else ["verify_product"]
+    else:
+        raise RuntimeError("bug_planner_invalid_step")
+    if remaining_files and len(inspections) < MAX_BUG_EXTRA_INSPECTIONS:
+        allowed.append("inspect")
+    allowed.append("clarify")
+    last_run = db.scalar(select(StepRun).where(
+        StepRun.task_id == task.id, StepRun.id < run.id).order_by(StepRun.id.desc()).limit(1))
+    reports = {name: (root / "evidence" / name).read_text(encoding="utf-8")
+               for name in ("test-report.md", "verification-report.md")
+               if (root / "evidence" / name).is_file()}
+    inspected_content = {}
+    for trace in inspections[-MAX_BUG_EXTRA_INSPECTIONS:]:
+        detail = root / trace.detail_path
+        if detail.is_file() and trace.status == "succeeded":
+            inspected_content[trace.metadata_json["path"]] = json.loads(
+                detail.read_text(encoding="utf-8"))["payload"]["content"]
+    context = {"approved_documents": {name: (root / "docs" / name).read_text(encoding="utf-8")
+                                      for name in ("product.md", "architecture.md", "dev-design.md")
+                                      if (root / "docs" / name).is_file()},
+               "skipped_design": skipped_design_evidence(task),
+               "acceptance_triage": triage, "last_action_result":
+               {"step": last_run.step.value, "status": last_run.status.value,
+                "error": last_run.error, "output_path": last_run.output_path} if last_run else None,
+               "reports": reports, "code_hashes": product_code_hashes(task),
+               "inspected_content": inspected_content, "allowed_actions": allowed,
+               "remaining_files": remaining_files,
+               "remaining_decisions": MAX_BUG_PLANNER_DECISIONS - len(decisions),
+               "repair_round": task.repair_round}
+    for attempt in range(2):
+        # Planner 只提出行动和证据目标，不接触工具；非法决定最多纠正一次。
+        response = model_tool_loop(
+            db, task, run,
+            """你是现有产品变更的 Next Action Planner。根据已确认变更、最近真实结果及调查证据，从 allowed_actions 中选择下一行动。不能跳过程序的测试、启动、浏览器和人工验收门径。只返回 JSON：action、path、reason、evidence_refs、clarifying_question；inspect 的 path 必须在 remaining_files 中；clarify 必须给出一个具体问题；其他行动的 path 为 null。""",
+            triage["user_feedback"], context, tools, tool_schemas=[],
+            history_key=f"bug_planner_{event_id}_{run.id}_{attempt}", runtime_step=Step.product_docs)
+        try:
+            value = json.loads(response.strip().removeprefix("```json").removeprefix("```")
+                               .removesuffix("```").strip())
+        except json.JSONDecodeError:
+            value = {}
+        if not isinstance(value, dict):
+            value = {}
+        action = value.get("action")
+        path = value.get("path")
+        valid = (action in allowed and isinstance(value.get("reason"), str)
+                 and bool(value["reason"].strip())
+                 and (action != "inspect" or path in remaining_files)
+                 and (action != "clarify" or isinstance(value.get("clarifying_question"), str)
+                      and bool(value["clarifying_question"].strip())))
+        if valid:
+            safe_record_trace(db, task, run, "bug_planner_decision", "succeeded", "Bug 下一行动",
+                              action, {"decision": value, "context": context},
+                              {"event_id": event_id, "action": action, "path": path})
+            if action == "inspect":
+                # 实际读取和内容哈希由程序产生，下一次规划将获得这份证据。
+                result = tools.execute(ToolCall(str(uuid.uuid4()), "read", {"path": path}))
+                if result.status != "succeeded" or result.output.get("truncated"):
+                    raise RuntimeError("bug_inspection_read_failed")
+                digest = hashlib.sha256((root / path).read_bytes()).hexdigest()
+                safe_record_trace(db, task, run, "bug_planner_inspect", "succeeded", "读取 Bug 证据",
+                                  path, {"path": path, "content": result.output["content"], "sha256": digest},
+                                  {"event_id": event_id, "path": path, "sha256": digest})
+            elif action == "clarify":
+                run.status = StepStatus.waiting_user
+                task.status = TaskStatus.waiting_user
+                add_message(db, task, "assistant", value["clarifying_question"])
+            db.commit()
+            return action
+        context["protocol_error"] = {"attempt": attempt + 1, "response": response,
+                                     "allowed_actions": allowed}
+    raise RuntimeError("bug_planner_protocol_failed")
+
+
 def product_feedback_is_decided(current_product: str, triage: dict) -> bool:
     # 已核实的明确验收变更覆盖旧产品条款，不再重复向用户确认。
     changes = triage.get("changes")
@@ -688,12 +869,127 @@ Draft 以用户明确需求、用户回答、验收分类结论和系统固定�
     db.commit()
 
 
+def plan_initial_design_action(db: Session, task: Task, run: StepRun, tools: ToolRuntime) -> str:
+    # 用已批准需求和项目固定约束判断缺失的设计文档是否确有必要。
+    root = workspace_for(task)
+    product_path = root / "docs/product.md"
+    if not product_path.is_file():
+        raise RuntimeError("approved_product_missing_for_design_plan")
+    product = product_path.read_text(encoding="utf-8")
+    architecture_path = root / "docs/architecture.md"
+    architecture = architecture_path.read_text(encoding="utf-8") if architecture_path.is_file() else ""
+    phase = "architecture" if task.cur_step == Step.architecture_docs else "dev_design"
+    triage = active_bug_triage(task)
+    allowed = (["update_architecture", "update_dev_design", "modify_code", "clarify"]
+               if phase == "architecture" else ["update_dev_design", "modify_code", "clarify"])
+    if (phase == "architecture" and triage.get("classification") == "architecture_defect") or (
+            phase == "dev_design" and triage.get("classification") == "dev_design_defect"):
+        # 已确认该设计阶段缺陷时不得再次以简单任务为由跳过。
+        allowed = [allowed[0], "clarify"]
+    decision_path = root / "evidence" / f"initial-{phase}-decision-v{run.attempt}.json"
+    current_hashes = {"product": content_hash(product), "architecture": content_hash(architecture)}
+    decision = None
+    if decision_path.is_file():
+        # 运行中恢复只复用与当前正式输入完全一致的已校验决定。
+        saved = json.loads(decision_path.read_text(encoding="utf-8"))
+        if saved.get("document_hashes") == current_hashes and saved.get("action") in allowed:
+            decision = saved
+    if decision is None:
+        user_messages = [message.content for message in db.scalars(select(Message).where(
+            Message.task_id == task.id, Message.role == "user").order_by(Message.id)).all()]
+        context = {"phase": phase, "approved_product": product, "existing_architecture": architecture,
+                   "project_constraints": FIXED_PRODUCT_CONSTRAINTS,
+                   "user_messages": user_messages, "allowed_actions": allowed}
+        for attempt in range(2):
+            # Planner 只返回建议，不写文件；非法输出最多纠正一次。
+            response = model_tool_loop(
+                db, task, run,
+                """你是新任务设计门径的 Next Action Planner。docs/product.md 已由程序在用户批准后正式化，正文即使残留「候选版」标题也不改变审批状态。Worker 的本地 HTTP 服务仅用于软件预览和健康检查，与生成产品不发起外部网络请求不冲突；这不是用户待决的产品设计。只依据已经批准的产品需求、现有正式设计和固定项目约束判断编码前还有没有必须写进独立设计文档的决定。不能按需求字数或软件名称判断。若模块职责、接口、数据、状态、关键流程或失败处理在正式需求和固定约束中已明确且无需额外取舍，可跳过不必要的设计文档；若某份设计承载必要取舍，则选对应更新行动。用户未确认的关键业务规则不能由你猜测，证据不足只提出一个澄清问题。只返回 JSON：action、reason、evidence（引用正式需求的具体句子，字符串数组）、unresolved_decisions（未解决的关键决定数组）、confidence（0 到 1）、clarifying_question。action 必须在 allowed_actions 中。跳过设计时 evidence 必须非空，unresolved_decisions 必须为空。不得调用工具或改文件。""",
+                product, {**context, "protocol_error": context.get("protocol_error")}, tools,
+                tool_schemas=[], history_key=f"initial_{phase}_plan_{run.attempt}_{attempt}")
+            try:
+                value = json.loads(response.strip().removeprefix("```json").removeprefix("```")
+                                   .removesuffix("```").strip())
+            except json.JSONDecodeError:
+                value = {}
+            if not isinstance(value, dict):
+                value = {}
+            action = value.get("action")
+            confidence = value.get("confidence")
+            evidence = value.get("evidence")
+            unresolved = value.get("unresolved_decisions")
+            skip = (action in {"update_dev_design", "modify_code"} if phase == "architecture"
+                    else action == "modify_code")
+            valid = (action in allowed and isinstance(value.get("reason"), str)
+                     and bool(value["reason"].strip())
+                     and isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+                     and 0 <= confidence <= 1 and (action == "clarify" or confidence >= 0.7)
+                     and isinstance(evidence, list) and
+                     all(isinstance(item, str) and item.strip() for item in evidence)
+                     and isinstance(unresolved, list) and
+                     all(isinstance(item, str) and item.strip() for item in unresolved)
+                     and (not skip or evidence and not unresolved)
+                     and (action != "clarify" or isinstance(value.get("clarifying_question"), str)
+                          and bool(value["clarifying_question"].strip())))
+            if valid:
+                skipped = (["architecture.md", "dev-design.md"] if phase == "architecture"
+                           and action == "modify_code" else ["architecture.md"] if phase == "architecture"
+                           and action == "update_dev_design" else ["dev-design.md"] if phase == "dev_design"
+                           and action == "modify_code" else [])
+                decision = {**value, "phase": phase, "document_hashes": current_hashes,
+                            "skipped_documents": skipped, "approved_product_path": "docs/product.md"}
+                write_json_atomic(decision_path, decision)
+                safe_record_trace(db, task, run, "initial_design_plan",
+                                  "waiting" if action == "clarify" else "succeeded",
+                                  "新任务设计门径", action,
+                                  {"input": context, "decision": decision},
+                                  {"action": action, "skipped_documents": skipped,
+                                   "decision_path": str(decision_path.relative_to(root)),
+                                   "confidence": confidence})
+                break
+            context["protocol_error"] = {"response": response, "attempt": attempt + 1,
+                                         "allowed_actions": allowed}
+        if decision is None:
+            # 非法决定无法证明可跳过设计，安全地转为人工澄清。
+            decision = {"action": "clarify", "reason": "设计门径行动或证据无效",
+                        "evidence": [], "unresolved_decisions": ["编码前必要设计仍待判断"],
+                        "confidence": 0, "clarifying_question":
+                        "请确认这项软件是否存在需要在编码前确定的模块、接口、状态或失败处理规则。",
+                        "phase": phase, "document_hashes": current_hashes,
+                        "skipped_documents": [], "approved_product_path": "docs/product.md"}
+            write_json_atomic(decision_path, decision)
+            safe_record_trace(db, task, run, "initial_design_plan", "waiting",
+                              "新任务设计门径", "clarify",
+                              {"input": context, "decision": decision},
+                              {"action": "clarify", "skipped_documents": [],
+                               "decision_path": str(decision_path.relative_to(root)),
+                               "confidence": 0})
+    action = decision["action"]
+    if action == "clarify":
+        run.status = StepStatus.waiting_user
+        task.status = TaskStatus.waiting_user
+        add_message(db, task, "assistant", decision["clarifying_question"])
+        db.commit()
+    elif action == "update_dev_design" and phase == "architecture":
+        # 缺失架构只保存跳过依据，进入必要的 Dev Design 生成。
+        run.input_path = "docs/product.md"
+        run.output_path = str(decision_path.relative_to(root))
+        finish_step(db, task, run, Step.dev_design)
+    elif action == "modify_code":
+        # 设计已由正式需求和固定约束覆盖，直接进入开发但保留规划证据。
+        run.input_path = "docs/product.md"
+        run.output_path = str(decision_path.relative_to(root))
+        finish_step(db, task, run, Step.develop)
+    return action
+
+
 def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntime, kind: str):
     # 处理架构或 Dev Design 的规划、评审和正式化。
     root = workspace_for(task)
-    source = "docs/product.md" if kind == "architecture" else "docs/architecture.md"
+    source = ("docs/product.md" if kind == "architecture" or
+              not (root / "docs/architecture.md").is_file() else "docs/architecture.md")
     target = "docs/architecture.md" if kind == "architecture" else "docs/dev-design.md"
-    revision = run.attempt > 1
+    revision = run.attempt > 1 and (root / target).is_file()
     version_suffix = f"-v{run.attempt}" if revision else ""
     draft = target.replace(".md", f"{version_suffix}-draft.md")
     review = target.replace(".md", f"{version_suffix}-review.md")
@@ -739,19 +1035,24 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
         diff_path = root / "evidence" / f"{kind}-upstream-diff-v{run.attempt}.md"
         diff_path.parent.mkdir(parents=True, exist_ok=True)
         diff_path.write_text(upstream_diff or "无文本差异。\n", encoding="utf-8")
-        # 由 Transition Planner 判断下游文档修订、复用或澄清。
+        # 设计阶段 Planner 从具体下一行动中选择修订、复用或澄清。
+        required_update = ((kind == "architecture" and acceptance_triage.get("classification") == "architecture_defect")
+                           or (kind == "dev_design" and acceptance_triage.get("classification") == "dev_design_defect"))
+        revise_action = "update_architecture" if kind == "architecture" else "update_dev_design"
+        reuse_action = "update_dev_design" if kind == "architecture" else "modify_code"
+        allowed_actions = [revise_action, "clarify"] if required_update else [revise_action, reuse_action, "clarify"]
         decision_text = model_tool_loop(
             db, task, run,
-            f"""你是 {label} Transition Planner，只判断现有{label}是否受本轮上游变化影响，不写文件。
-只返回 JSON：action 只能是 revise、reuse、clarify；reason；affected_sections；preserved_sections；confidence（0 到 1）；clarifying_question。
-若需修改，必须以旧{label}为基线局部演进；若确认所有上游变化均不影响{label}才返回 reuse；证据不足返回 clarify。""",
+            f"""你是已有产品设计阶段的 Next Action Planner，根据上游正式文档差异决定下一行动，不写文件。
+只返回 JSON：action 必须属于 allowed_actions；reason；affected_sections；preserved_sections；confidence（0 到 1）；clarifying_question。
+选择 {revise_action} 表示现有{label}受影响，应以旧正式版本为基线局部修订。选择 {reuse_action} 表示有证据确认全部上游变化不影响现有{label}，程序保存复用血缘后进入下游；证据不足选择 clarify。""",
             upstream_diff,
             {"previous_upstream": previous_upstream_text, "current_upstream": source_text,
              "upstream_diff": upstream_diff, "previous_artifact": previous_text,
-             "acceptance_triage": acceptance_triage},
+             "acceptance_triage": acceptance_triage, "allowed_actions": allowed_actions},
             tools, tool_schemas=[], history_key=f"{kind}_transition")
         # 程序校验 Planner 的动作和置信度，低置信度转为澄清。
-        transition = parse_transition_decision(decision_text)
+        transition = parse_transition_decision(decision_text, kind, required_update)
         transition.update({"kind": kind, "version": run.attempt,
                            "previous_upstream_path": str(previous_upstream.relative_to(root)),
                            "current_upstream_path": source,
@@ -765,7 +1066,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
                           {"previous_upstream": previous_upstream_text,
                            "current_upstream": source_text, "upstream_diff": upstream_diff,
                            "previous_artifact": previous_text, "decision": transition},
-                          {"action": transition["action"], "confidence": transition["confidence"],
+                          {"action": transition["action"], "next_action": transition["next_action"],
+                           "confidence": transition["confidence"],
                            "decision_path": str(transition_path.relative_to(root))})
         if transition["action"] == "clarify":
             run.status = StepStatus.waiting_user
@@ -836,8 +1138,17 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
 def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     # 根据当前设计开发或返修生成软件并核对实现血缘。
     root = workspace_for(task)
-    dev_design = (root / "docs" / "dev-design.md").read_text(encoding="utf-8")
     product = (root / "docs" / "product.md").read_text(encoding="utf-8")
+    architecture_path = root / "docs/architecture.md"
+    architecture = architecture_path.read_text(encoding="utf-8") if architecture_path.is_file() else ""
+    design_path = root / "docs/dev-design.md"
+    if not design_path.is_file() and "dev-design.md" not in skipped_design_evidence(task):
+        raise RuntimeError("dev_design_missing_without_planner_skip")
+    design_source = "docs/dev-design.md" if design_path.is_file() else "approved_product_and_constraints"
+    # Dev Design 被明确跳过时，以已批准需求及固定实现约束构造开发依据。
+    dev_design = (design_path.read_text(encoding="utf-8") if design_path.is_file() else
+                  f"正式产品需求：\n{product}\n\n现有架构：\n{architecture or '无独立架构文档'}"
+                  f"\n\n项目固定实现约束：\n" + "\n".join(FIXED_PRODUCT_CONSTRAINTS))
     existing = [str(path.relative_to(root)) for path in (root / "product").rglob("*") if path.is_file()]
     required = ["index.html", "styles.css", "app.js", "calculator.test.js", "verify_product.py", "implementation.md"]
     is_repair = task.repair_round > 0
@@ -848,7 +1159,12 @@ def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     upstream_changed = (all(path.is_file() for path in required_paths)
                         and lineage.get("dev_design_hash") != dev_design_hash)
     # 文件齐全也要核对设计血缘；上游设计变化时仍必须增量修改。
-    is_revision = is_repair or upstream_changed
+    triage = active_bug_triage(task)
+    feature_change = triage.get("classification") == "requirement_change"
+    non_bug_change = triage.get("classification") in {
+        "requirement_change", "architecture_defect", "dev_design_defect"
+    }
+    is_revision = is_repair or upstream_changed or non_bug_change
     if not is_revision and all(path.is_file() for path in required_paths):
         run.output_path = "product/implementation.md"
         finish_step(db, task, run, Step.test)
@@ -857,16 +1173,18 @@ def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
 write/read 的路径相对任务工作区，不是 product 工作目录。必须生成以下精确路径：product/index.html、product/styles.css、product/app.js、product/calculator.test.js、product/verify_product.py、product/implementation.md。
 不存在的文件必须使用 overwrite=false；只有 existing_product_files 明确列出的已有文件才使用 overwrite=true。不要把文件写到工作区根目录。
 优先确保六个必需文件全部存在，再使用 exec 调试；不要在必需文件未齐时反复运行测试或临时诊断命令。正式测试和失败返修由后续 test Step 负责。
-calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Python Playwright 验证真实浏览器中的加减乘除、异常输入和错误后恢复。
+calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Python Playwright 验证已批准需求中的核心行为、异常输入和错误后恢复。
 可使用 exec 执行 node --test calculator.test.js。不得引入生成产品依赖。"""
+    if not design_path.is_file():
+        instructions += "\n此任务经 Planner 确认无需独立 Dev Design；按 context 的正式产品需求和固定约束实施，不补写虚假的设计文档，也不擅自增加产品行为。"
     if is_repair:
         instructions += """
-这是失败后的返修，不是首次生成。正式 Dev Design、失败来源、对应的完整失败报告和全部当前产品文件内容已经完整放在 context 中；不要读取文件，直接逐项判断失败来自实现、测试还是两者。测试期望与 Dev Design 冲突时修测试，实现偏离时修实现。
+这是失败后的返修，不是首次生成。正式实现依据、失败来源、对应的完整失败报告和全部当前产品文件内容已经完整放在 context 中；不要读取文件，直接逐项判断失败来自实现、测试还是两者。测试期望与已批准需求冲突时修测试，实现偏离时修实现。
 必须优先解决 failure_source_step 指向的失败：若为 verify_product，重点检查 Playwright 输出、verify_product.py 是否使用系统传入的 HTTP URL，以及浏览器脚本是否真实加载；不得只运行 Node 测试后宣称完成。
 至少使用 overwrite=true 实际修改一个 existing_product_files 中的文件。可以用 exec 运行 Node 测试，但不要查找、安装或尝试切换 Python／Playwright 环境；系统会在你结束本轮后使用受控 Python 自动复跑原失败验证。完成必要写入和 Node 测试后立即结束，不得因为六个文件已经存在就宣称完成。"""
-    elif upstream_changed:
+    elif upstream_changed or non_bug_change:
         instructions += """
-这是上游需求或设计变化后的增量开发。当前产品文件基于旧 Dev Design；必须比较 previous_dev_design 与当前 dev_design，以现有代码为基线，只修改受差异影响的代码和测试，不得推倒重写无关部分。
+这是已验收产品的增量开发。必须比较变更后的正式产品需求、previous_product 与当前代码；若 Dev Design 变化，再比较 previous_dev_design 与当前 dev_design。以现有代码为基线，只修改受差异影响的代码和测试，不得推倒重写无关部分。
 至少使用 overwrite=true 修改一个 existing_product_files 中的文件，并用 exec 运行更新后的相关测试。不得因为六个文件已经存在就宣称完成。"""
         safe_record_trace(db, task, run, "transition_decision", "succeeded", "开发影响判断",
                           "revise", {"previous_lineage": lineage,
@@ -879,6 +1197,8 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
     } if is_revision else {}
     versioned_designs = sorted((root / "docs").glob("dev-design-v*.md"))
     previous_dev_design = versioned_designs[-2].read_text(encoding="utf-8") if len(versioned_designs) >= 2 else ""
+    versioned_products = sorted((root / "docs").glob("product-v*.md"))
+    previous_product = versioned_products[-2].read_text(encoding="utf-8") if len(versioned_products) >= 2 else ""
     dev_design_diff = unified_text_diff(previous_dev_design, dev_design,
                                         versioned_designs[-2].name if len(versioned_designs) >= 2 else "previous-missing",
                                         "dev-design.md")
@@ -897,9 +1217,12 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
         latest_failure_report = previous_failed.error or latest_failure_report
     base_context = {"failure_source_step": failure_source,
                     "latest_failure_report": latest_failure_report,
-                    "dev_design": dev_design, "existing_product_files": existing,
+                    "dev_design": dev_design, "design_source": design_source,
+                    "approved_product": product, "existing_architecture": architecture,
+                    "existing_product_files": existing,
                     "current_product_files": current_product_files,
                     "acceptance_triage": acceptance_triage,
+                    "previous_product": previous_product,
                     "previous_dev_design": previous_dev_design,
                     "dev_design_diff": dev_design_diff,
                     "previous_dev_design_hash": lineage.get("dev_design_hash"),
@@ -915,6 +1238,14 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
         if missing:
             raise RuntimeError(f"implementation_files_missing:{','.join(missing)}")
         changed = not is_revision or any(attempt_before.get(path) != path.read_bytes() for path in required_paths)
+        if non_bug_change and not is_repair:
+            code_changed = any(attempt_before.get(root / "product" / name) !=
+                               (root / "product" / name).read_bytes()
+                               for name in ("index.html", "styles.css", "app.js"))
+            test_changed = any(attempt_before.get(root / "product" / name) !=
+                               (root / "product" / name).read_bytes()
+                               for name in ("calculator.test.js", "verify_product.py"))
+            changed = code_changed and test_changed if feature_change else code_changed or test_changed
         if changed and is_repair and failure_source in {Step.test.value, Step.verify_product.value}:
             if failure_source == Step.verify_product.value and task.result_url:
                 command = f"{shlex.quote(sys.executable)} verify_product.py {shlex.quote(task.result_url)}"
@@ -959,8 +1290,9 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
         db.commit()
         if repair_attempt == max_attempts:
             raise RuntimeError("repair_made_no_changes")
-    # 更新实现所依据的 Dev Design 哈希与血缘。
+    # 更新实现依据的哈希和来源，便于后续设计变化时识别需要增量修改。
     write_json_atomic(lineage_path, {"dev_design_hash": dev_design_hash,
+                                    "design_source": design_source,
                                     "develop_attempt": run.attempt,
                                     "product_hash": content_hash(product)})
     run.output_path = "product/implementation.md"
@@ -975,9 +1307,15 @@ def handle_test(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     report.write_text("# 测试报告\n\n```text\n" + json.dumps(result.__dict__, ensure_ascii=False, indent=2) + "\n```\n",
                       encoding="utf-8")
     run.output_path = "evidence/test-report.md"
-    if result.status == "succeeded" and result.output.get("exit_code") == 0:
+    passed = (result.status == "succeeded" and result.output.get("exit_code") == 0
+              and "[SKIP]" not in result.output.get("stdout", ""))
+    if passed:
         safe_record_trace(db, task, run, "validation", "succeeded", "单元测试通过",
                           "node --test calculator.test.js 返回 0", result.__dict__)
+        if active_bug_triage(task):
+            # 为 Bug 闭环绑定本次通过测试的代码版本，防止改动后直接启动。
+            write_json_atomic(workspace_for(task) / "evidence" / "bug-tested-code-hashes.json",
+                              product_code_hashes(task))
         finish_step(db, task, run, Step.start_product)
     else:
         fail_or_repair(db, task, run, result.error or result.output.get("stderr") or "unit_tests_failed")
@@ -1054,6 +1392,19 @@ def handle_verify(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     readme.write_text(f"# 生成的软件\n\n访问地址：{task.result_url}\n\n启动命令：`{task.process_command}`\n",
                       encoding="utf-8")
     run.output_path = "evidence/verification-report.md"
+    if active_bug_triage(task):
+        # Bug 验证通过后记录对应代码版本，留待 Planner 提议 finish 并由程序核验。
+        write_json_atomic(workspace_for(task) / "evidence" / "bug-verified-code-hashes.json",
+                          product_code_hashes(task))
+        run.status = StepStatus.succeeded
+        run.finished_at = datetime.utcnow()
+        safe_record_trace(db, task, run, "step", "succeeded", "Bug 验证阶段完成",
+                          "自动测试与真实浏览器验证通过，等待 Planner 提议 finish",
+                          {"result_url": task.result_url}, started_at=run.started_at,
+                          finished_at=run.finished_at)
+        task.version += 1
+        db.commit()
+        return
     # 阶段成功后同时更新执行记录、任务状态和版本。
     run.status = StepStatus.succeeded
     run.finished_at = datetime.utcnow()
@@ -1075,33 +1426,24 @@ def reject_event(event: Event, reason: str):
     event.processed_at = datetime.utcnow()
 
 
-TRIAGE_TARGETS = {
-    "requirement_change": Step.product_docs,
-    "architecture_defect": Step.architecture_docs,
-    "dev_design_defect": Step.dev_design,
-    "implementation_defect": Step.develop,
+ACCEPTANCE_ACTIONS = {
+    "update_requirement": ("requirement_change", Step.product_docs),
+    "update_architecture": ("architecture_defect", Step.architecture_docs),
+    "update_dev_design": ("dev_design_defect", Step.dev_design),
+    "modify_code": ("implementation_defect", Step.develop),
 }
 
 
-def parse_triage_result(text: str) -> dict:
-    # 解析并校验人工验收问题的分类结果。
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    try:
-        value = json.loads(cleaned)
-    except (json.JSONDecodeError, IndexError):
-        return {"classification": "unclear", "reason": "模型未返回合法 JSON",
-                "evidence": [], "changes": [], "confidence": 0,
-                "clarifying_question": "请补充期望行为、实际行为和复现步骤。"}
-    classification = value.get("classification")
+def parse_acceptance_action(value: dict) -> dict:
+    # 把 Planner 行动映射成下游兼容的分类，并校验需求变更的行为契约。
+    action = value.get("action")
     confidence = value.get("confidence", 0)
-    if classification not in {*TRIAGE_TARGETS, "unclear"} or not isinstance(confidence, (int, float)):
-        classification = "unclear"
-    if confidence < 0.7:
-        classification = "unclear"
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+        confidence = 0
+    classification = ACCEPTANCE_ACTIONS[action][0] \
+        if isinstance(action, str) and action in ACCEPTANCE_ACTIONS else "unclear"
     changes = []
-    for item in value.get("changes", []):
+    for item in value.get("changes", []) if isinstance(value.get("changes"), list) else []:
         if not isinstance(item, dict):
             continue
         current = item.get("current_behavior")
@@ -1111,9 +1453,10 @@ def parse_triage_result(text: str) -> dict:
                 and isinstance(examples, list) and examples and all(isinstance(x, str) and x.strip() for x in examples):
             changes.append({"current_behavior": current.strip(), "expected_behavior": expected.strip(),
                             "acceptance_examples": [x.strip() for x in examples]})
-    if classification == "requirement_change" and not changes:
+    if confidence < 0.7 or classification == "requirement_change" and not changes:
         classification = "unclear"
     return {
+        "planner_action": action if classification != "unclear" else "clarify",
         "classification": classification,
         "reason": str(value.get("reason", "证据不足")),
         "evidence": value.get("evidence") if isinstance(value.get("evidence"), list) else [],
@@ -1125,8 +1468,80 @@ def parse_triage_result(text: str) -> dict:
     }
 
 
-def classify_acceptance_feedback(db: Session, task: Task, event: Event, feedback: str):
-    # 使用模型和正式设计证据分类验收反馈。
+def plan_acceptance_action(db: Session, task: Task, run: StepRun, feedback: str,
+                           approved_documents: dict, candidates: list[str]) -> tuple[dict, dict]:
+    # 同一个 Planner 按反馈连续调查证据，然后直接选择文档、代码或澄清行动。
+    root = workspace_for(task)
+    inspected: dict = {}
+    tools = ToolRuntime(root)
+    protocol_error = None
+    invalid_count = 0
+    for index in range(6):
+        remaining = [path for path in candidates if path not in inspected]
+        allowed = ["clarify", *ACCEPTANCE_ACTIONS]
+        if remaining and len(inspected) < 3:
+            allowed.insert(0, "inspect")
+        # Planner 不接触工具；所有正式文档和已读取证据在下一轮规划中继续可见。
+        response = model_tool_loop(
+            db, task, run,
+            """你是已有产品验收反馈的 Next Action Planner。用户描述只是线索；对照实际存在的正式文档、明确保存的设计跳过依据和已调查证据，直接决定下一行动。被跳过的文档不是空白正式设计；若新问题表明必须补设计，可选择对应更新。若要判断代码实现缺陷，先 inspect 相关产品代码；证据不足可继续 inspect 或 clarify。只返回一个 JSON 对象：action、path、reason、evidence、changes、confidence、clarifying_question。action 必须在 allowed_actions 中；inspect 的 path 必须在 remaining_files 中，其他行动的 path 为 null。编号反馈逐条解释，选择所有条目中最早失效的行动。改变或新增产品可见行为选 update_requirement；需求不变但架构决策缺失或冲突选 update_architecture；架构成立但实现细节设计必须补充或冲突选 update_dev_design；正式需求和现有设计或跳过依据均支持期望行为而代码不符才选 modify_code。不能只凭“缺陷”一词认定代码问题，不能把用户描述的现状当期望。update_requirement 的 changes 每项须含 current_behavior、expected_behavior 和非空 acceptance_examples；clarify 须只提出一个具体问题。不得写文件或执行命令。""",
+            feedback, {"approved_documents": approved_documents, "remaining_files": remaining,
+                       "skipped_design": skipped_design_evidence(task),
+                       "inspected_files": inspected, "allowed_actions": allowed,
+                       "protocol_error": protocol_error,
+                       "latest_verification_report":
+                       (root / "evidence" / "verification-report.md").read_text(encoding="utf-8")
+                       if (root / "evidence" / "verification-report.md").is_file() else ""},
+            tools, tool_schemas=[], history_key=f"acceptance_plan_{run.id}_{index}",
+            runtime_step=Step.product_docs)
+        try:
+            decision = json.loads(response.strip().removeprefix("```json").removeprefix("```")
+                                  .removesuffix("```").strip())
+        except json.JSONDecodeError:
+            decision = {}
+        if not isinstance(decision, dict):
+            decision = {}
+        action = decision.get("action")
+        path = decision.get("path")
+        if action == "inspect" and path in remaining and len(inspected) < 3:
+            # 工具再次解析目标路径，拒绝清单外文件和符号链接逃逸。
+            result = tools.execute(ToolCall(call_id=str(uuid.uuid4()), tool_name="read", parameters={"path": path}))
+            if result.status != "succeeded" or result.output.get("truncated"):
+                safe_record_trace(db, task, run, "acceptance_inspect", "failed", "证据读取失败",
+                                  str(path), {"error": result.error, "truncated": result.output.get("truncated")})
+                break
+            digest = hashlib.sha256((root / path).read_bytes()).hexdigest()
+            inspected[path] = {"content": result.output["content"], "sha256": digest}
+            safe_record_trace(db, task, run, "acceptance_inspect", "succeeded", "读取验收证据",
+                              path, {"path": path, "sha256": digest, "content": result.output["content"]},
+                              {"path": path, "sha256": digest})
+            continue
+        # 文档变更可依正式文件直接判断；实现缺陷必须有实际读取的产品代码证据。
+        code_inspected = any(path.startswith("product/") and Path(path).suffix in {
+            ".html", ".css", ".js", ".py"} for path in inspected)
+        if action in {"clarify", *ACCEPTANCE_ACTIONS} and action in allowed \
+                and (action != "modify_code" or code_inspected):
+            parsed = parse_acceptance_action(decision)
+            safe_record_trace(db, task, run, "acceptance_plan_decision", "succeeded", "验收下一行动",
+                              parsed["planner_action"], {"decision": decision, "validated": parsed},
+                              {"action": parsed["planner_action"], "classification": parsed["classification"]})
+            return parsed, inspected
+        safe_record_trace(db, task, run, "acceptance_inspect", "failed", "Planner 行动无效",
+                          str(action), {"decision": decision, "allowed_actions": allowed,
+                                        "remaining_files": remaining})
+        invalid_count += 1
+        protocol_error = {"message": "行动不在可选集合、目标不在文件清单，或代码缺少必需调查。",
+                          "attempt": invalid_count}
+        if invalid_count >= 2:
+            break
+    # 非法决定或达到有界调用上限时不猜测阶段，转为用户澄清。
+    return {"planner_action": "clarify", "classification": "unclear", "reason": "调查证据不足或行动无效",
+            "evidence": [], "changes": [], "confidence": 0,
+            "clarifying_question": "请补充实际行为、期望行为和复现步骤。"}, inspected
+
+
+def plan_acceptance_feedback(db: Session, task: Task, event: Event, feedback: str):
+    # 将已有产品验收反馈交给统一 Planner 调查并提议最早需要处理的行动。
     root = workspace_for(task)
     run = db.scalar(select(StepRun).where(
         StepRun.task_id == task.id, StepRun.step == Step.verify_product,
@@ -1140,64 +1555,77 @@ def classify_acceptance_feedback(db: Session, task: Task, event: Event, feedback
                       checkpoint_path=str(checkpoint), last_completed_action_index=-1)
         db.add(run)
         db.flush()
-        safe_record_trace(db, task, run, "step", "running", "验收分类开始",
+        safe_record_trace(db, task, run, "step", "running", "验收规划开始",
                           f"Event {event.id} 使用独立调用预算",
                           {"event_id": event.id, "attempt": attempt}, started_at=run.started_at)
     inputs = {}
     for name in ("product.md", "architecture.md", "dev-design.md"):
         path = root / "docs" / name
         inputs[name] = path.read_text(encoding="utf-8") if path.is_file() else ""
-    verification = root / "evidence" / "verification-report.md"
+    skips = skipped_design_evidence(task)
+    product_files = sorted(str(path.relative_to(root)) for path in (root / "product").rglob("*") if path.is_file())
+    report_files = [f"evidence/{name}" for name in ("verification-report.md", "test-report.md")
+                    if (root / "evidence" / name).is_file()]
+    if not inputs["product.md"] or any(not inputs[name] and name not in skips
+                                         for name in ("architecture.md", "dev-design.md")):
+        # 只有具备明确跳过决定的缺省设计才可继续规划，其他缺失文档须澄清。
+        result = {"planner_action": "clarify", "classification": "unclear", "reason": "正式设计缺失",
+                  "evidence": [], "changes": [], "confidence": 0,
+                  "clarifying_question": "当前正式需求或设计文件缺失，请先确认该产品的有效文档。"}
+        inspected = {}
+    else:
+        result, inspected = plan_acceptance_action(
+            db, task, run, feedback, inputs, report_files + product_files)
     context = {
         "approved_documents": inputs,
-        "product_files": sorted(str(path.relative_to(root)) for path in (root / "product").rglob("*") if path.is_file()),
-        "latest_verification_report": verification.read_text(encoding="utf-8") if verification.is_file() else "",
+        "skipped_design": skips,
+        "product_files": product_files,
+        "inspected_files": inspected,
     }
-    # 读取正式设计和验证证据，取得验收问题分类建议。
-    response = model_tool_loop(
-        db, task, run,
-        """你负责人工验收问题分流，不修改任何文件，也不解决问题。比较用户反馈与三份正式文档，寻找最早失效产物。用户是在报告当前软件问题，短句可能省略“当前软件”这一主语；必须结合报告问题的对话行为、例子和对比句区分当前行为与期望行为，不得孤立按字面把缺陷描述当成用户要求保留的约束。编号或分条反馈必须逐条解释、逐条形成 changes，再选择所有条目中最早失效的阶段作为总体 classification。
-只返回一个 JSON 对象，不要 Markdown：classification 只能是 requirement_change、architecture_defect、dev_design_defect、implementation_defect、unclear；target_step 填建议阶段；reason 简述判断；evidence 列出引用的文档与原文依据；changes 为数组，每项包含 current_behavior、expected_behavior、acceptance_examples；confidence 为 0 到 1；只有 unclear 才填写 clarifying_question。
-改变或新增产品可见行为属于 requirement_change；需求不变但架构冲突属于 architecture_defect；架构成立但 Dev Design 冲突或缺失属于 dev_design_defect；三份文档都支持期望行为但软件不符才属于 implementation_defect。不得仅凭用户使用“缺陷”一词判为实现缺陷。""",
-        feedback, context, ToolRuntime(root), tool_schemas=[],
-        history_key=f"acceptance_triage_{event.id}", runtime_step=Step.product_docs)
-    result = parse_triage_result(response)
-    # 再次核对行为变更契约与分类是否一致。
-    consistency_text = model_tool_loop(
+    # Planner 已提议澄清时无需再请求一致性模型。
+    if result["classification"] == "unclear":
+        consistency = {"consistent": False, "contradictions": [result["reason"]],
+                       "clarifying_question": result["clarifying_question"]}
+    else:
+        # 再次核对行为变更契约与分类是否一致。
+        consistency_text = model_tool_loop(
         db, task, run,
         """你是独立 Acceptance Interpretation Consistency Validator，不重新解决产品问题，也不修改文件。
 检查初步分类是否忠实且自洽：用户是在“报告问题”，每个编号项都必须解释；current_behavior 必须是用户观察到的现状，expected_behavior 必须是用户希望改变后的行为。若某项被解释出的 expected_behavior 与现有正式需求相同，但初步分类又无法说明实际实现如何违反它，该解释通常把缺陷描述反当成期望；若原句方向存在两种合理解释，也必须判为不一致并要求澄清。总体 classification 必须采用所有条目中最早失效的阶段。
 只返回 JSON：consistent 为布尔值；contradictions 为字符串数组；clarifying_question 在不一致时只问一个能消除行为方向歧义的问题，一致时为 null。""",
-        feedback, {"approved_documents": inputs, "initial_triage": result},
+        feedback, {"approved_documents": inputs, "skipped_design": skips,
+                   "inspected_files": inspected, "initial_triage": result},
         ToolRuntime(root), tool_schemas=[],
         history_key=f"acceptance_consistency_{event.id}", runtime_step=Step.product_docs)
-    try:
-        consistency = json.loads(consistency_text.strip().removeprefix("```json").removeprefix("```")
-                                 .removesuffix("```").strip())
-    except json.JSONDecodeError:
-        consistency = {"consistent": False, "contradictions": ["一致性审查未返回合法 JSON"],
-                       "clarifying_question": "请明确说明当前行为和你期望修改后的行为。"}
+        try:
+            consistency = json.loads(consistency_text.strip().removeprefix("```json").removeprefix("```")
+                                     .removesuffix("```").strip())
+        except json.JSONDecodeError:
+            consistency = {"consistent": False, "contradictions": ["一致性审查未返回合法 JSON"],
+                           "clarifying_question": "请明确说明当前行为和你期望修改后的行为。"}
     valid_consistency = (isinstance(consistency, dict)
                          and isinstance(consistency.get("consistent"), bool)
                          and isinstance(consistency.get("contradictions"), list))
     if not valid_consistency or consistency.get("consistent") is not True:
         result["classification"] = "unclear"
+        result["planner_action"] = "clarify"
         result["clarifying_question"] = (consistency.get("clarifying_question")
                                            if isinstance(consistency, dict) else None) or \
                                           "请明确说明当前行为和你期望修改后的行为。"
     result["consistency_validation"] = consistency
-    result.update({"event_id": event.id, "user_feedback": feedback})
-    target = TRIAGE_TARGETS.get(result["classification"])
+    result.update({"event_id": event.id, "user_feedback": feedback,
+                   "inspected_evidence": {path: data["sha256"] for path, data in inspected.items()}})
+    target = ACCEPTANCE_ACTIONS[result["planner_action"]][1] if result["classification"] != "unclear" else None
     result["target_step"] = target.value if target else None
     evidence_path = root / "evidence" / f"acceptance-triage-{event.id}.json"
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    safe_record_trace(db, task, run, "acceptance_triage",
-                      "waiting" if target is None else "succeeded", "验收问题分类",
-                      f"{result['classification']} → {result['target_step'] or 'waiting_user'}",
-                      {"input": {"feedback": feedback, **context}, "model_response": response,
-                       "validated_result": result},
-                      {"classification": result["classification"], "target_step": result["target_step"],
+    safe_record_trace(db, task, run, "acceptance_plan",
+                      "waiting" if target is None else "succeeded", "验收下一行动",
+                      f"{result['planner_action']} → {result['target_step'] or 'waiting_user'}",
+                      {"input": {"feedback": feedback, **context}, "validated_result": result},
+                      {"planner_action": result["planner_action"], "classification": result["classification"],
+                       "target_step": result["target_step"],
                        "confidence": result["confidence"], "event_id": event.id})
     if target is None:
         run.status = StepStatus.waiting_user
@@ -1211,12 +1639,12 @@ def classify_acceptance_feedback(db: Session, task: Task, event: Event, feedback
         task.status = TaskStatus.running
         task.cur_step = target
         task.failure_reason = None
-        if target == Step.develop:
+        if target == Step.develop and result["classification"] == "implementation_defect":
             task.repair_round += 1
         else:
             task.repair_round = 0
         add_message(db, task, "assistant",
-                    f"问题已识别为 {result['classification']}，将从 {target.value} 阶段重新处理。")
+                    f"下一行动为 {result['planner_action']}，将从 {target.value} 阶段处理。")
     return result
 
 
@@ -1269,7 +1697,18 @@ def consume_event(db: Session, event: Event, task: Task):
                 reject_event(event, "acceptance_feedback_required")
                 return
             # 将人工反馈路由到最早失效阶段。
-            classify_acceptance_feedback(db, task, event, feedback)
+            plan_acceptance_feedback(db, task, event, feedback)
+    elif event.type == "change_request":
+        # 已验收的产品在原任务上接收新功能请求，保留全部正式文档和历史证据。
+        if task.status != TaskStatus.succeeded:
+            reject_event(event, "task_not_succeeded_for_change_request")
+            return
+        feedback = str(data.get("feedback", "")).strip()
+        if not feedback:
+            reject_event(event, "change_request_feedback_required")
+            return
+        add_message(db, task, "user", feedback)
+        plan_acceptance_feedback(db, task, event, feedback)
     elif event.type == "user_message":
         add_message(db, task, "user", str(data.get("content", "")))
         if task.status == TaskStatus.waiting_user:
@@ -1289,7 +1728,7 @@ def consume_event(db: Session, event: Event, task: Task):
                     prior_feedback = json.loads(previous[-1].read_text(encoding="utf-8")).get("user_feedback", "")
                 combined = f"{prior_feedback}\n\n用户补充：{data.get('content', '')}".strip()
                 # 将人工反馈路由到最早失效阶段。
-                classify_acceptance_feedback(db, task, event, combined)
+                plan_acceptance_feedback(db, task, event, combined)
             else:
                 task.status = TaskStatus.running
     else:
@@ -1333,6 +1772,38 @@ def process_task(db: Session) -> bool:
     run = create_step_run(db, task)
     db.commit()
     try:
+        if task.cur_step in {Step.architecture_docs, Step.dev_design}:
+            # 缺失的设计文档先由 Planner 判断必要性；已有正式版本仍走返工影响判断。
+            design_target = ("architecture.md" if task.cur_step == Step.architecture_docs
+                             else "dev-design.md")
+            if not (workspace_for(task) / "docs" / design_target).is_file():
+                action = plan_initial_design_action(db, task, run, tools)
+                if action in {"clarify", "modify_code"}:
+                    return True
+                if action == "update_dev_design" and run.step == Step.architecture_docs:
+                    return True
+        if active_bug_triage(task) and task.cur_step in {
+                Step.develop, Step.test, Step.start_product, Step.verify_product}:
+            # Bug 闭环每轮先由 Planner 提议行动，程序只执行经校验的阶段内动作。
+            action = plan_bug_action(db, task, run, tools)
+            if action in {"inspect", "clarify"}:
+                return True
+            if action == "finish":
+                # 再次核对同一代码版本的验证及服务可访问性，最终仅提交人工验收。
+                if not bug_verified_ready(db, task):
+                    raise RuntimeError("bug_finish_evidence_stale")
+                with httpx.Client(trust_env=False, timeout=2) as client:
+                    if client.get(task.result_url).status_code != 200:
+                        raise RuntimeError("bug_finish_product_unavailable")
+                run.status = StepStatus.succeeded
+                run.finished_at = datetime.utcnow()
+                task.status = TaskStatus.waiting_acceptance
+                task.version += 1
+                safe_record_trace(db, task, run, "state_transition", "waiting", "等待人工验收",
+                                  "finish → waiting_acceptance", {"result_url": task.result_url})
+                add_message(db, task, "assistant", f"软件已完成自动测试与真实浏览器验证，请访问 {task.result_url} 验收。")
+                db.commit()
+                return True
         if task.cur_step == Step.product_docs:
             handle_product_docs(db, task, run, tools)
         elif task.cur_step == Step.architecture_docs:
