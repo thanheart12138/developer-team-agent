@@ -335,11 +335,17 @@ result_url
 
 ### 4.8 Trace 写入协议
 
+模型响应记录 Provider 实际返回的 usage，并在调用详情展示输入、输出、总 Token 及可用缓存用量。缺失用量标为未返回，不按零处理、不估算费用、不补写历史。DeepSeek 请求流式 usage；Kimi 保留现有协议并解析其返回用量。精确列举的 Token 计数字段仅在值为非负整数时免于敏感字段脱敏，token 凭据及其他敏感字段仍脱敏。
+
+请求配置 `max_completion_tokens` 的非负整数值同样保留，表示输出上限而非凭据；其他类型继续脱敏。旧 Trace 已脱敏的数据不倒填。
+
 详情 JSON 至少包含 `type`、`status`、`title`、`summary`、`payload` 和时间信息。写入顺序为：计算下一个任务序号、敏感字段过滤、原子创建详情文件、创建 TraceRecord、提交事务。
 
-新增两类展示事件：`model_stream_delta` 保存一次 Provider 文本增量及 `request_id`、顺序号；`artifact` 保存成功写入文件的工作区相对路径、文件名、工具调用 ID 和 SHA-256。模型请求与响应 Trace 的 metadata 都保存同一个 `request_id`，前端据此把流式片段、最终回答和原始返回关联为一次调用。
+流式文本仅用于实时展示，不生成 `model_stream_delta` Trace，也不永久保存 Provider 原始分片数组。Worker 在系统临时目录按任务维护一份原子覆盖的当前回答快照（含 request_id、文本、更新时间），最多每 250ms 更新一次；API 通过 `GET /api/tasks/{task_id}/live-response` 提供快照，超过 15 秒未更新视为过期，响应禁止缓存。每次传输结束清空快照，重试不拼接上一次失败输出。该快照不是审计记录，不保证进程崩溃后的恢复。最终响应保存合并文本、工具调用及 Provider 元信息；传输或协议失败保存截至失败时的部分响应和错误，不保存原始分片。
 
-任务页每 750ms 增量查询消息与 Trace。左栏按 `created_at` 合并消息和 Trace 摘要，不展示 `model_stream_delta` 独立卡片，而是把同一 `request_id` 的片段拼到对应模型请求下方；收到最终响应后以正式 assistant 消息为准。右栏按所选类型分别展示模型输入、模型原始返回、工具名称／参数／返回值或文件内容，嵌套对象使用有标签的层级视图，不以 JSON dump 作为默认阅读方式。
+`artifact` 保存成功写入文件的工作区相对路径、文件名、工具调用 ID 和 SHA-256。模型请求与响应 Trace 的 metadata 都保存同一个 `request_id`。
+
+任务页每 750ms 增量查询消息、Trace 和当前回答快照。左栏按 `created_at` 合并消息和 Trace 摘要，将快照文本显示在对应模型请求下方；收到最终响应后以正式 assistant 消息为准。历史 model_stream_delta 文件保留但不再用于实时展示。右栏展示模型输入、合并响应、工具参数／返回值或文件内容。
 
 `GET /api/tasks/{task_id}/files?path={workspace_relative_path}` 只允许读取该任务工作区内不超过 1MiB 的普通文件。绝对路径、目录和越出工作区的路径一律拒绝。
 
@@ -625,6 +631,10 @@ v2.1 独立预算固定为：单 Step 最多 100 次逻辑模型调用；一次 
 4. 执行 HTTP 健康检查；成功后进入 `verify_product`，失败则按返修规则处理。
 
 ### 9.7 verify_product
+
+Context 第一阶段优化：正式需求在 input 中只传一次，context 用来源与内容哈希标识；成对问答保持完整，仅额外携带未配对且未作为 input 的用户请求。无旧 Dev Design 时不生成全文式差异；Planner 的 input 已为差异时不在 context 重复差异。开发／返修附带文档来源、当前轮开始时的文件哈希和失败证据归属。历史报告未记录验证时文件哈希的，明确标为未知，不用当前文件推定历史版本。本阶段不压缩工具历史，不改变工具权限或执行预算。
+
+验证脚本读取命令行传入的当前产品 URL，不自行启动 HTTP 服务或绑定固定端口。返修纠正每轮刷新实际文件内容；受控复验失败后，最新真实输出持续保留，不能被最初失败报告覆盖。最后未写入且此前复验失败时，终止原因保留 `repair_made_no_changes:latest_validation_failed`，具体结果见返修 Trace。
 
 1. 使用 Python Playwright 在真实浏览器环境验证加、减、乘、除和异常输入。
 2. 使用 JavaScript 单元测试验证计算逻辑。

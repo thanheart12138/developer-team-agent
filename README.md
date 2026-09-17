@@ -29,6 +29,8 @@ v1 最小完整链路已实现。v2 在此基础上增加全过程实时可视�
 
 ## Windows 本地运行
 
+模型回答保留实时展示，但流式片段不永久保存。审计保存完整请求、合并后的响应、工具和状态记录；调用中断时保存部分响应与错误。当前回答使用系统临时目录中的单份快照，调用结束清空，旧版流式 Trace 不删除。
+
 前置条件：Python 3.12、Node.js、MySQL，以及可用的 DeepSeek 和 Kimi Code API Key。先创建空数据库 `dev_team_simulator`，再在 PowerShell 中执行：
 
 ```powershell

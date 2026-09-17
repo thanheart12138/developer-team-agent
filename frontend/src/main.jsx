@@ -9,12 +9,14 @@ const STATUS_LABELS = { pending: "等待", running: "执行中", waiting_user: "
 const TRACE_LABELS = { model_request: "模型调用信息", model_response: "模型返回数据", model_retry: "模型重试", model_fallback: "模型降级", tool_call: "工具调用", tool_result: "工具返回数据", artifact: "文件", user_event: "用户操作", transition_decision: "流程决策", acceptance_triage: "问题分类", program_validation: "验证结果", state_transition: "状态变化" };
 const FIELD_LABELS = { payload: "调用内容", raw_response: "Provider 原始返回", messages: "消息", content: "内容", input: "本次输入", context: "上下文", tools: "可用工具", model: "模型", provider: "服务商", parameters: "参数", result: "返回值", actions: "工具请求", text: "模型回答", request_id: "请求 ID", tool_call_id: "工具调用 ID", path: "工作区路径", name: "文件名", sha256: "内容哈希", status: "状态", summary: "摘要", title: "标题", role: "角色", type: "类型", created_at: "创建时间", started_at: "开始时间", finished_at: "结束时间" };
 const mergeUnique = (current, incoming, key) => [...new Map([...current, ...incoming].map((item) => [item[key], item])).values()];
+Object.assign(FIELD_LABELS, { prompt_tokens: "输入 Token", completion_tokens: "输出 Token", total_tokens: "总 Token", prompt_cache_hit_tokens: "缓存命中 Token", prompt_cache_miss_tokens: "缓存未命中 Token", prompt_tokens_details: "输入明细", completion_tokens_details: "输出明细", cached_tokens: "缓存 Token", reasoning_tokens: "推理 Token" });
 
 function App() {
   const [taskId, setTaskId] = useState(() => Number(new URLSearchParams(window.location.search).get("task")) || null);
   const [task, setTask] = useState(null);
   const [messages, setMessages] = useState([]);
   const [traces, setTraces] = useState([]);
+  const [liveResponse, setLiveResponse] = useState({});
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
   const [productDocument, setProductDocument] = useState("");
@@ -47,10 +49,12 @@ function App() {
     if (!taskId) return undefined;
     const poll = async () => {
       try {
-        const [nextTask, nextMessages, nextTraces] = await Promise.all([
+        const [nextTask, nextMessages, nextTraces, nextLiveResponse] = await Promise.all([
           request(`/tasks/${taskId}`), request(`/tasks/${taskId}/messages?after_id=${messageCursor.current}`), request(`/tasks/${taskId}/traces?after_sequence=${traceCursor.current}`),
+          request(`/tasks/${taskId}/live-response`),
         ]);
         setTask(nextTask);
+        setLiveResponse(nextLiveResponse);
         if (nextTask.status === "waiting_user" && nextTask.product_document_available) setProductDocument((await request(`/tasks/${taskId}/documents/product`)).content);
         if (nextMessages.messages.length) { messageCursor.current = nextMessages.latest_message_id; setMessages((current) => mergeUnique(current, nextMessages.messages, "id")); }
         if (nextTraces.traces.length) { traceCursor.current = nextTraces.latest_sequence; setTraces((current) => mergeUnique(current, nextTraces.traces, "sequence")); }
@@ -71,11 +75,7 @@ function App() {
     return () => { active = false; };
   }, [taskId, selected]);
 
-  const streams = useMemo(() => traces.filter((item) => item.type === "model_stream_delta").reduce((all, item) => {
-    const id = item.metadata?.request_id;
-    if (id) all[id] = `${all[id] || ""}${item.metadata?.delta || item.summary || ""}`;
-    return all;
-  }, {}), [traces]);
+  const streams = liveResponse.request_id ? { [liveResponse.request_id]: liveResponse.text } : {};
   const completed = useMemo(() => new Set(traces.filter((item) => item.type === "model_response" && item.status === "succeeded").map((item) => item.metadata?.request_id).filter(Boolean)), [traces]);
   const feed = useMemo(() => [
     ...messages.filter((item) => item.content?.trim()).map((item) => ({ ...item, kind: "message", sortAt: item.created_at || "" })),
@@ -125,7 +125,7 @@ function TraceSections({ type, detail }) {
     try { user = JSON.parse(userText); } catch { /* 保留原始文本 */ }
     return <><ReadableSection title="系统指令" value={system} /><ReadableSection title="用户输入与上下文" value={user} /><ReadableSection title="可用工具" value={call.tools} /><ReadableSection title="调用配置" value={{ model: call.model, stream: call.stream, thinking: call.thinking, max_completion_tokens: call.max_completion_tokens }} /></>;
   }
-  if (type === "model_response") return <><ReadableSection title="模型回答" value={payload.text} /><ReadableSection title="工具请求" value={payload.actions} /><ReadableSection title="Provider 原始返回" value={payload.raw_response} /></>;
+  if (type === "model_response") return <><ReadableSection title="Token 用量" value={payload.raw_response?.usage || "Provider 未返回用量（历史记录可能未保留）"} /><ReadableSection title="模型回答" value={payload.text} /><ReadableSection title="工具请求" value={payload.actions} /><ReadableSection title={payload.raw_response?.stream_events ? "Provider 原始返回（历史记录）" : "Provider 合并响应"} value={payload.raw_response} /></>;
   if (type === "tool_call") return <><ReadableSection title="调用工具" value={payload.tool_name || payload.name} /><ReadableSection title="调用参数" value={payload.parameters || payload} /></>;
   if (type === "tool_result") return <ReadableSection title="工具返回值" value={payload.result || payload} />;
   return <ReadableSection title="完整信息" value={payload} />;

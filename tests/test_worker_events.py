@@ -156,7 +156,9 @@ def test_initial_design_planner_skips_only_unneeded_documents(
         (docs / "architecture.md").write_text("单模块页面", encoding="utf-8")
 
     def fake_loop(db, task, run, instructions, input_text, context, tools, **kwargs):
-        assert "两个输入" in context["approved_product"]
+        assert "两个输入" in input_text
+        assert "approved_product" not in context
+        assert context["input_source"]["path"] == "docs/product.md"
         assert "原生 HTML" in context["project_constraints"][0]
         return json.dumps({"action": action, "reason": "已批准需求写清行为和错误恢复",
                            "evidence": ["两个输入，点击加法得结果；错误显示 Error，可继续输入"],
@@ -262,7 +264,9 @@ def test_develop_uses_approved_product_when_dev_design_was_explicitly_skipped(tm
         handle_develop(db, task, run, ToolRuntime(tmp_path))
         assert task.cur_step == Step.test
         assert seen["design_source"] == "approved_product_and_constraints"
-        assert "2+3 得 5" in seen["dev_design"]
+        assert "正式产品需求见 input" in seen["dev_design"]
+        assert "approved_product" not in seen
+        assert seen["dev_design_diff"] == ""
         assert json.loads((tmp_path / "evidence/implementation-lineage.json").read_text())[
             "design_source"] == "approved_product_and_constraints"
 
@@ -839,6 +843,30 @@ def test_model_loop_stops_when_program_validates_required_output(tmp_path, monke
         assert run.model_call_count == 1
 
 
+def test_model_stream_is_live_only_and_cleared_after_completion(tmp_path, monkeypatch):
+    from backend.app.runtime.tracing import read_live_response
+
+    def fake_call(runtime, task_id, request):
+        request.on_delta("实时回答")
+        assert read_live_response(str(tmp_path))["text"] == "实时回答"
+        return ModelResult(request.request_id, 1, "实时回答", [], "completed")
+
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name="live only", cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path))
+        db.add(task)
+        db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, attempt=1)
+        db.add(run)
+        db.commit()
+        assert model_tool_loop(db, task, run, "answer", "input", {}, ToolRuntime(tmp_path)) == "实时回答"
+        assert read_live_response(str(tmp_path)) == {}
+        types = list(db.scalars(select(TraceRecord.type).where(TraceRecord.task_id == task.id)))
+        assert types == ["model_request", "model_response"]
+        assert len(list((tmp_path / "traces").rglob("*.json"))) == 2
+
+
 def test_model_loop_allows_the_one_hundredth_logical_call(tmp_path, monkeypatch):
     calls = 0
 
@@ -934,6 +962,7 @@ def test_product_revision_receives_complete_user_history(tmp_path, monkeypatch):
         if request.tools == []:
             return ModelResult(request.request_id, 1, "READY", [], "completed")
         if "Product Reviewer" in request.instructions:
+            assert request.context["unpaired_user_requests"] == ["initial", "first answer", "second answer"]
             path, content = "docs/product-v1-review.md", "## 阻塞问题\n无\n## 普通问题\n无\n## 建议\n无"
         elif "Product Author" in request.instructions:
             path, content = "docs/product-v1-candidate.md", "reviewed candidate"
@@ -960,7 +989,7 @@ def test_product_revision_receives_complete_user_history(tmp_path, monkeypatch):
         db.commit()
         handle_product_docs(db, task, run, ToolRuntime(tmp_path))
         assert captured["conversation_history"] == []
-        assert captured["unpaired_user_requests"] == ["initial", "first answer", "second answer"]
+        assert captured["unpaired_user_requests"] == ["first answer", "second answer"]
         assert [tool["function"]["name"] for tool in captured["tools"]] == ["write"]
         assert (tmp_path / "docs/product-v1-review.md").is_file()
         assert (tmp_path / "docs/product-v1-candidate.md").read_text() == "reviewed candidate"
@@ -997,6 +1026,9 @@ def test_product_context_keeps_question_and_answer_together_and_uses_current_pro
         pair = captured["context"]["conversation_history"][0]
         assert pair["question"]["content"] == "结果为 5 后按 + 时如何处理？"
         assert pair["answer"]["content"] == "显示 5+"
+        assert captured["context"]["unpaired_user_requests"] == ["最初需求"]
+        assert "current_product" not in captured["context"]
+        assert captured["context"]["input_source"]["kind"] == "approved_product"
         ledger = json.loads((tmp_path / "evidence/conversation-turns.json").read_text())
         assert ledger[0]["status"] == "answered"
 
@@ -1502,6 +1534,60 @@ def test_verify_repair_uses_verification_report_and_retries_no_change(tmp_path, 
         assert contexts[1]["repair_feedback"]["attempt"] == 1
         assert "unchanged_file_sha256" in contexts[1]["repair_feedback"]
         assert task.cur_step == Step.test
+
+
+def test_repair_preserves_latest_validation_and_refreshes_files(tmp_path, monkeypatch):
+    # 固定先修改但复验失败、随后两次无写入的真实故障路径。
+    from backend.app.runtime.tools import ToolResult
+
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "product").mkdir()
+    (tmp_path / "evidence").mkdir()
+    (tmp_path / "docs/product.md").write_text("product", encoding="utf-8")
+    (tmp_path / "docs/dev-design.md").write_text("design", encoding="utf-8")
+    (tmp_path / "evidence/verification-report.md").write_text("old rounding failure", encoding="utf-8")
+    for name in ["index.html", "styles.css", "app.js", "calculator.test.js",
+                 "verify_product.py", "implementation.md"]:
+        (tmp_path / "product" / name).write_text("old", encoding="utf-8")
+    contexts = []
+
+    def fake_loop(db, task, run, instructions, input_text, context, tools, **kwargs):
+        # 第一轮写入，后两轮只回复文字。
+        contexts.append(context)
+        if len(contexts) == 1:
+            (tmp_path / "product/verify_product.py").write_text("new", encoding="utf-8")
+
+    monkeypatch.setattr("backend.app.runtime.worker.model_tool_loop", fake_loop)
+    monkeypatch.setattr("backend.app.runtime.worker.execute_tool", lambda *args: ToolResult(
+        "validation", "exec", "succeeded", {"exit_code": 1, "stdout": "",
+                                             "stderr": "Address already in use"}, None))
+    with SessionLocal() as db:
+        task = Task(task_name="latest validation", cur_step=Step.develop,
+                    status=TaskStatus.running, workspace_path=str(tmp_path), repair_round=1,
+                    result_url="http://127.0.0.1:64412")
+        db.add(task); db.flush()
+        db.add(StepRun(task_id=task.id, step=Step.verify_product,
+                       status=StepStatus.failed, attempt=1))
+        db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=2)
+        db.add(run); db.commit()
+        try:
+            handle_develop(db, task, run, ToolRuntime(tmp_path))
+        except RuntimeError as exc:
+            assert str(exc) == "repair_made_no_changes:latest_validation_failed"
+        else:
+            raise AssertionError("unchanged corrections must stop")
+    assert len(contexts) == 3
+    for context in contexts[1:]:
+        assert context["current_product_files"]["product/verify_product.py"] == "new"
+        assert "Address already in use" in context["latest_failure_report"]
+    assert "Address already in use" in contexts[2]["repair_feedback"]["latest_failure_report"]
+    assert "validation_result" in contexts[2]["repair_feedback"]
+    assert contexts[0]["failure_evidence_source"]["file_snapshot"] == "unknown"
+    assert contexts[1]["failure_evidence_source"]["source"] == "controlled_validation"
+    assert contexts[1]["failure_evidence_source"]["file_snapshot"] == contexts[1]["snapshot"]["file_sha256"]
+    assert contexts[2]["snapshot"]["repair_attempt"] == 3
+    assert contexts[2]["snapshot"]["scope"] == "attempt_start"
 
 
 def test_repair_fails_only_after_three_no_change_attempts(tmp_path, monkeypatch):

@@ -37,6 +37,26 @@ def test_missing_task_has_explicit_error():
     assert response.json()["detail"]["code"] == "task_not_found"
 
 
+def test_live_response_is_task_scoped_uncached_and_temporary(tmp_path):
+    from backend.app.runtime.tracing import publish_live_response
+
+    with SessionLocal() as db:
+        task = Task(task_name="live", workspace_path=str(tmp_path))
+        other = Task(task_name="other", workspace_path=str(tmp_path / "other"))
+        db.add_all([task, other])
+        db.commit()
+        task_id, other_id = task.id, other.id
+    client = TestClient(app)
+    publish_live_response(str(tmp_path), "request-1", "实时文本")
+    response = client.get(f"/api/tasks/{task_id}/live-response")
+    assert response.json()["text"] == "实时文本"
+    assert response.headers["cache-control"] == "no-store"
+    assert client.get(f"/api/tasks/{other_id}/live-response").json() == {}
+    assert client.get("/api/tasks/999/live-response").status_code == 404
+    publish_live_response(str(tmp_path), "", "")
+    assert client.get(f"/api/tasks/{task_id}/live-response").json() == {}
+
+
 def test_event_is_created_pending():
     client = TestClient(app)
     task_id = client.post("/api/tasks", json={"task_name": "calculator", "initial_message": "build it"}).json()["task_id"]

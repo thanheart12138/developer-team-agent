@@ -97,42 +97,64 @@ class ChatCompletionsRuntime:
                 f"set SIMULATOR_{self.provider.upper()}_API_KEY_FILE"
             )
         payload = self.build_payload(request)
-        # 统一使用流式响应，使文本增量可以实时保存到 Trace。
+        # 流式传输仅用于实时展示，审计保存合并响应。
         payload["stream"] = True
-        events = []
         text_parts = []
         tools_by_index: dict[int, dict] = {}
-        with httpx.Client(trust_env=False, timeout=self.timeout) as client:
-            # 发送真实 Provider 请求，认证头只用于传输，不进入请求体。
-            with client.stream("POST", f"{self.base_url.rstrip('/')}/chat/completions",
-                               headers={"Authorization": f"Bearer {api_key}"}, json=payload) as response:
-                response.raise_for_status()
-                # 逐条合并 SSE 文本和分片工具参数。
-                for line in response.iter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    event = json.loads(data)
-                    events.append(event)
-                    delta = event.get("choices", [{}])[0].get("delta", {})
-                    content = delta.get("content") or ""
-                    if content:
-                        text_parts.append(content)
-                        if request.on_delta:
-                            request.on_delta(content)
-                    # 按工具调用索引拼接流式返回的 ID、名称和参数。
-                    for item in delta.get("tool_calls") or []:
-                        index = item.get("index", 0)
-                        target = tools_by_index.setdefault(index, {"id": "", "function": {"name": "", "arguments": ""}})
-                        target["id"] += item.get("id") or ""
-                        function = item.get("function") or {}
-                        target["function"]["name"] += function.get("name") or ""
-                        target["function"]["arguments"] += function.get("arguments") or ""
-        return self._finish(task_id, request, "".join(text_parts),
-                            [tools_by_index[index] for index in sorted(tools_by_index)],
-                            {"stream_events": events})
+        metadata = {}
+
+        def merged_response() -> dict:
+            # 汇总文本、完整工具参数和响应元信息，不保留原始分片。
+            return {**metadata, "text": "".join(text_parts),
+                    "tool_calls": [tools_by_index[index] for index in sorted(tools_by_index)]}
+
+        try:
+            with httpx.Client(trust_env=False, timeout=self.timeout) as client:
+                # 认证头只用于传输，不进入审计响应。
+                with client.stream("POST", f"{self.base_url.rstrip('/')}/chat/completions",
+                                   headers={"Authorization": f"Bearer {api_key}"}, json=payload) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        event = json.loads(data)
+                        for key in ("id", "model", "created", "usage", "system_fingerprint"):
+                            if key in event and event[key] is not None:
+                                metadata[key] = event[key]
+                        choices = event.get("choices") or []
+                        if not choices:
+                            continue
+                        choice = choices[0]
+                        if isinstance(choice.get("usage"), dict):
+                            metadata["usage"] = choice["usage"]
+                        if choice.get("finish_reason"):
+                            metadata["finish_reason"] = choice["finish_reason"]
+                        delta = choice.get("delta") or {}
+                        content = delta.get("content") or ""
+                        if content:
+                            text_parts.append(content)
+                            if request.on_delta:
+                                request.on_delta(content)
+                        # 工具参数按调用索引拼接，保留最终原始参数字符串供协议排查。
+                        for item in delta.get("tool_calls") or []:
+                            index = item.get("index", 0)
+                            target = tools_by_index.setdefault(index, {"id": "", "function": {"name": "", "arguments": ""}})
+                            target["id"] += item.get("id") or ""
+                            function = item.get("function") or {}
+                            target["function"]["name"] += function.get("name") or ""
+                            target["function"]["arguments"] += function.get("arguments") or ""
+        except httpx.HTTPError as exc:
+            # 传输中断仍携带部分文本和工具参数，由 Worker 归档一次。
+            exc.response_body = merged_response()
+            raise
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            # 无法解析的流归入协议错误，保存已合并内容而不保存原始事件。
+            raise ModelProtocolError("invalid_stream_response", merged_response()) from exc
+        merged = merged_response()
+        return self._finish(task_id, request, merged["text"], merged["tool_calls"], merged)
 
 
 class DeepSeekRuntime(ChatCompletionsRuntime):
@@ -158,7 +180,8 @@ class DeepSeekRuntime(ChatCompletionsRuntime):
             "model": self.model_name,
             "messages": build_messages(request),
             "tools": request.tools or None,
-            "stream": False,
+            "stream": True,
+            "stream_options": {"include_usage": True},
             "thinking": {"type": "disabled"},
         }
 
@@ -187,7 +210,7 @@ class KimiRuntime(ChatCompletionsRuntime):
             "model": self.model_name,
             "messages": build_messages(request),
             "tools": request.tools or None,
-            "stream": False,
+            "stream": True,
             "thinking": {"type": "disabled"},
             "max_completion_tokens": settings.kimi_max_completion_tokens,
         }

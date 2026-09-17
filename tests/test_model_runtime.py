@@ -68,6 +68,9 @@ def test_deepseek_request_and_tool_call_mapping(monkeypatch):
         assert result.finish_reason == "tool_calls"
         assert result.actions[0].tool_name == "write"
         assert result.actions[0].parameters["path"] == "docs/product.md"
+        assert "stream_events" not in result.raw_response
+        assert result.raw_response["text"] == "writing"
+        assert result.raw_response["tool_calls"][0]["function"]["name"] == "write"
         assert db.scalar(select(Message).where(Message.id == result.message_id)).content == "writing"
 
 
@@ -85,6 +88,49 @@ def test_streaming_text_is_forwarded_incrementally(monkeypatch):
             "instructions", "input", {}, [], "request-stream", on_delta=deltas.append,
         ))
     assert deltas == ["writing"]
+
+
+def test_stream_usage_only_chunk_is_preserved(monkeypatch):
+    def lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"ok"}}],"usage":null}'
+        yield 'data: {"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":2,"total_tokens":44}}'
+        yield 'data: {"choices":[],"usage":null}'
+        yield 'data: [DONE]'
+
+    monkeypatch.setattr(settings, "deepseek_api_key", "test-only-key")
+    monkeypatch.setattr(FakeResponse, "iter_lines", lines)
+    captured = {}
+    monkeypatch.setattr("backend.app.runtime.model.httpx.Client", lambda **kwargs: FakeClient(captured, **kwargs))
+    with SessionLocal() as db:
+        task = Task(task_name="usage")
+        db.add(task)
+        db.flush()
+        result = DeepSeekRuntime(db).call(task.id, ModelRequest("instructions", "input", {}, [], "usage"))
+        assert result.raw_response["usage"] == {"prompt_tokens": 42, "completion_tokens": 2, "total_tokens": 44}
+        assert captured["json"]["stream_options"] == {"include_usage": True}
+
+
+def test_interrupted_stream_keeps_partial_response_without_events(monkeypatch):
+    import httpx
+    import pytest
+
+    def interrupted_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"partial"}}]}'
+        yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"write","arguments":"{"}}]}}]}'
+        raise httpx.ReadError("interrupted")
+
+    monkeypatch.setattr(settings, "deepseek_api_key", "test-only-key")
+    monkeypatch.setattr(FakeResponse, "iter_lines", interrupted_lines)
+    monkeypatch.setattr("backend.app.runtime.model.httpx.Client", lambda **kwargs: FakeClient({}, **kwargs))
+    with SessionLocal() as db:
+        task = Task(task_name="interrupted")
+        db.add(task)
+        db.flush()
+        with pytest.raises(httpx.ReadError) as failure:
+            DeepSeekRuntime(db).call(task.id, ModelRequest("instructions", "input", {}, [], "partial"))
+        assert failure.value.response_body["text"] == "partial"
+        assert failure.value.response_body["tool_calls"][0]["function"]["arguments"] == "{"
+        assert "stream_events" not in failure.value.response_body
 
 
 def test_key_can_be_loaded_from_ignored_file(tmp_path, monkeypatch):

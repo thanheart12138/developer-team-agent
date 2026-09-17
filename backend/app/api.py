@@ -1,14 +1,14 @@
 import hashlib
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
 from .models import Event, Message, Step, StepRun, Task, TaskStatus, TraceRecord
-from .runtime.tracing import safe_record_trace
+from .runtime.tracing import read_live_response, safe_record_trace
 from .schemas import CreateEventRequest, CreateTaskRequest, MessageResponse, TaskResponse, TraceResponse
 
 router = APIRouter(prefix="/api")
@@ -106,6 +106,14 @@ def get_traces(task_id: int, after_sequence: int = 0, db: Session = Depends(get_
         created_at=row.created_at.isoformat(),
     ).model_dump() for row in rows]
     return {"traces": traces, "latest_sequence": traces[-1]["sequence"] if traces else after_sequence}
+
+
+@router.get("/tasks/{task_id}/live-response")
+def get_live_response(task_id: int, response: Response, db: Session = Depends(get_db)):
+    # 仅展示当前临时回答，不允许客户端缓存模型增量内容。
+    task = require_task(db, task_id)
+    response.headers["Cache-Control"] = "no-store"
+    return read_live_response(task.workspace_path) if task.workspace_path else {}
 
 
 @router.get("/tasks/{task_id}/traces/{sequence}")

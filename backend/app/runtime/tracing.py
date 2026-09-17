@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import tempfile
+import hashlib
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,7 +14,41 @@ from sqlalchemy.orm import Session
 from ..models import StepRun, Task, TraceRecord
 
 SENSITIVE_PARTS = ("authorization", "api_key", "apikey", "token", "password", "secret")
+TOKEN_COUNTS = {"prompt_tokens", "completion_tokens", "total_tokens", "prompt_cache_hit_tokens",
+                "prompt_cache_miss_tokens", "cached_tokens", "reasoning_tokens",
+                "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+                "max_completion_tokens"}
 logger = logging.getLogger(__name__)
+
+
+def _live_path(workspace: str) -> Path:
+    # 用工作区标识隔离不同任务的临时快照，不在任务产物中归档。
+    key = hashlib.sha256(str(Path(workspace).resolve()).encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / f"simulator-live-{key}.json"
+
+
+def publish_live_response(workspace: str, request_id: str, text: str) -> None:
+    # 原子覆盖当前回答；空请求表示本次传输结束，不保留回答内容。
+    path = _live_path(workspace)
+    temporary = path.with_suffix(".tmp")
+    try:
+        temporary.write_text(json.dumps({"request_id": request_id, "text": text,
+                                         "updated_at": time.time()}, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
+    except OSError as exc:
+        # 实时展示失败不改变模型调用结果；旧快照由过期规则失效。
+        logger.warning("Live response unavailable: %s", type(exc).__name__)
+
+
+def read_live_response(workspace: str) -> dict:
+    # 返回尚未过期的临时回答，缺失或损坏不影响任务查询。
+    try:
+        value = json.loads(_live_path(workspace).read_text(encoding="utf-8"))
+        if value.get("request_id") and time.time() - value["updated_at"] <= 15:
+            return value
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return {}
 
 
 def sanitize(value: Any) -> Any:
@@ -21,6 +57,7 @@ def sanitize(value: Any) -> Any:
         return {
             # 递归检查字段名，避免已知敏感键进入持久化详情。
             str(key): "[REDACTED]" if any(part in str(key).lower() for part in SENSITIVE_PARTS)
+            and not (str(key) in TOKEN_COUNTS and type(item) is int and item >= 0)
             else sanitize(item)
             for key, item in value.items()
         }

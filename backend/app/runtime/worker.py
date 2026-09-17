@@ -21,7 +21,7 @@ from ..models import Event, EventStatus, Message, Step, StepRun, StepStatus, Tas
 from .contracts import ModelRequest, ToolCall, ToolResult
 from .model import ModelProtocolError, create_model_runtime
 from .tools import TOOL_SCHEMAS, ToolRuntime
-from .tracing import safe_record_trace
+from .tracing import publish_live_response, safe_record_trace
 
 NEXT_STEP = {
     Step.architecture_docs: Step.dev_design,
@@ -334,17 +334,15 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, in
         # 每次逻辑模型调用先计入阶段预算并持久化。
         run.model_call_count += 1
         db.commit()
-        stream_index = 0
+        stream_parts = []
+        last_publish = 0.0
         def on_delta(delta: str) -> None:
-            # 将模型流式文本增量写入 Trace。
-            nonlocal stream_index
-            stream_index += 1
-            safe_record_trace(db, task, run, "model_stream_delta", "running", "模型流式回答",
-                              delta[:120], {"request_id": request.request_id, "delta": delta,
-                                           "index": stream_index},
-                              {"history_key": history_key, "request_id": request.request_id,
-                               "index": stream_index, "delta": delta})
-            db.commit()
+            # 限频发布临时回答快照，不写数据库或永久 Trace。
+            nonlocal last_publish
+            stream_parts.append(delta)
+            if time.monotonic() - last_publish >= 0.25:
+                publish_live_response(str(workspace_for(task)), request.request_id, "".join(stream_parts))
+                last_publish = time.monotonic()
         # 把当前上下文和已执行工具结果送回模型续写。
         request = ModelRequest(instructions=f"{BASE_INSTRUCTIONS}\n\n{instructions}", input=input_text,
                                context={**context, "tool_history": history},
@@ -372,7 +370,21 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, in
             for transport_attempt in range(1, MAX_TRANSPORT_ATTEMPTS + 1):
                 try:
                     # 执行真实模型请求；协议错误与传输错误采用不同处理路径。
-                    result = runtime.call(task.id, request)
+                    stream_parts.clear()
+                    last_publish = 0.0
+                    try:
+                        result = runtime.call(task.id, request)
+                    except (httpx.HTTPError, ModelProtocolError) as exc:
+                        # 中断时只归档合并的部分响应和错误，不归档流式事件。
+                        safe_record_trace(db, task, run, "model_interrupted", "failed", "模型调用中断",
+                                          type(exc).__name__,
+                                          {"request_id": request.request_id,
+                                           "partial_response": getattr(exc, "response_body", {"text": "".join(stream_parts)})},
+                                          {"provider": runtime.provider, "model": runtime.model_name})
+                        db.commit()
+                        raise
+                    finally:
+                        publish_live_response(str(workspace_for(task)), "", "")
                     break
                 except ModelProtocolError as exc:
                     protocol_error = exc
@@ -731,6 +743,12 @@ def handle_product_docs(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     current_product_path = workspace_for(task) / "docs" / "product.md"
     current_product = current_product_path.read_text(encoding="utf-8") if current_product_path.is_file() else ""
     primary_product_input = current_product or initial
+    # 回答只通过完整问答对传递，初始需求已作为 input 时也不重复携带。
+    paired_ids = {turn["answer"]["message_id"] for turn in conversation_turns if turn.get("answer")}
+    unpaired_requests = [message.content for message in messages
+                         if message.role == "user" and message.id not in paired_ids]
+    if not current_product and unpaired_requests:
+        unpaired_requests = unpaired_requests[1:]
     target = f"docs/product-v{version}-draft.md"
     review_target = f"docs/product-v{version}-review.md"
     candidate_target = f"docs/product-v{version}-candidate.md"
@@ -741,8 +759,9 @@ def handle_product_docs(db: Session, task: Task, run: StepRun, tools: ToolRuntim
                        {"question": turn.get("question"), "answer": turn.get("answer"),
                         "status": turn.get("status"), "turn_id": turn.get("turn_id")}
                        for turn in conversation_turns
-                   ], "unpaired_user_requests": user_messages,
-                   "current_product": current_product,
+                   ], "unpaired_user_requests": unpaired_requests,
+                   "input_source": {"kind": "approved_product" if current_product else "initial_request",
+                                    "sha256": content_hash(primary_product_input)},
                    "fixed_v1_boundaries": ["Windows 本地运行", "浏览器使用",
                                            "原生 HTML/CSS/JavaScript", "单用户",
                                            "不需要公网、域名或安装包"],
@@ -792,7 +811,7 @@ Draft 以用户明确需求、用户回答、验收分类结论和系统固定�
                         f"""你是独立 Product Reviewer，不是 Draft 作者。对照全部用户消息、上一版正式需求和本轮 Draft 进行评审，只写入 {review_target}，write 必须使用 overwrite=false。
 评审报告必须依次包含“阻塞问题”“普通问题”“建议”三个章节，没有内容的章节明确写“无”。阻塞问题包括遗漏或曲解用户明确要求、与用户要求或正式边界冲突、导致验收无法判定的问题。若 acceptance_triage 标记 requirement_change，必须检查 Draft 是否仍保留了被本轮反馈推翻的旧约束；保留即为阻塞问题。普通问题是不阻塞当前目标但应澄清或修正的问题。建议不得擅自扩大产品范围。""",
                         draft_text,
-                        {"user_messages": user_messages, "previous_product": previous_text,
+                        {"unpaired_user_requests": unpaired_requests if current_product else [initial] + unpaired_requests, "previous_product": previous_text,
                          "question_answer_turns": conversation_turns,
                          "acceptance_triage": acceptance_triage}, tools,
                         stop_when=lambda: (workspace_for(task) / review_target).is_file(),
@@ -807,7 +826,7 @@ Draft 以用户明确需求、用户回答、验收分类结论和系统固定�
                         f"""你是 Product Author。根据 Draft、独立 Review、全部用户消息和上一版正式需求生成供用户审批的候选版，只写入 {candidate_target}，write 必须使用 overwrite=false。
 必须解决 Review 中的阻塞问题；普通问题在不替用户做关键决定的前提下修正；建议只有不扩大范围且有明确依据时才采纳。不得把模型推测写成用户明确要求。""",
                         draft_text,
-                        {"review": review_text, "user_messages": user_messages,
+                        {"review": review_text, "unpaired_user_requests": unpaired_requests if current_product else [initial] + unpaired_requests,
                          "question_answer_turns": conversation_turns,
                          "previous_product": previous_text,
                          "acceptance_triage": acceptance_triage}, tools,
@@ -826,7 +845,8 @@ Draft 以用户明确需求、用户回答、验收分类结论和系统固定�
 逐条比较 current_behavior、expected_behavior、acceptance_examples 与候选文档。若候选仍保留被推翻的旧行为、把现状当期望、遗漏期望行为或没有可执行验收标准，则 covered=false。
 只返回 JSON：items 数组，每项包含 index（从 1 开始）、covered、reason；all_covered 仅在所有条目 covered=true 时为 true。不要返回 Markdown。""",
             candidate_text, {"changes": changes, "previous_product": previous_text,
-                             "user_messages": user_messages}, tools, tool_schemas=[],
+                             "unpaired_user_requests": unpaired_requests if current_product else [initial] + unpaired_requests,
+                             "question_answer_turns": conversation_turns}, tools, tool_schemas=[],
             history_key="product_change_coverage")
         try:
             coverage = json.loads(coverage_text.strip().removeprefix("```json").removeprefix("```")
@@ -897,7 +917,7 @@ def plan_initial_design_action(db: Session, task: Task, run: StepRun, tools: Too
     if decision is None:
         user_messages = [message.content for message in db.scalars(select(Message).where(
             Message.task_id == task.id, Message.role == "user").order_by(Message.id)).all()]
-        context = {"phase": phase, "approved_product": product, "existing_architecture": architecture,
+        context = {"phase": phase, "input_source": {"path": "docs/product.md", "sha256": content_hash(product)}, "existing_architecture": architecture,
                    "project_constraints": FIXED_PRODUCT_CONSTRAINTS,
                    "user_messages": user_messages, "allowed_actions": allowed}
         for attempt in range(2):
@@ -1048,7 +1068,7 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
 选择 {revise_action} 表示现有{label}受影响，应以旧正式版本为基线局部修订。选择 {reuse_action} 表示有证据确认全部上游变化不影响现有{label}，程序保存复用血缘后进入下游；证据不足选择 clarify。""",
             upstream_diff,
             {"previous_upstream": previous_upstream_text, "current_upstream": source_text,
-             "upstream_diff": upstream_diff, "previous_artifact": previous_text,
+             "input_source": "upstream_diff", "previous_artifact": previous_text,
              "acceptance_triage": acceptance_triage, "allowed_actions": allowed_actions},
             tools, tool_schemas=[], history_key=f"{kind}_transition")
         # 程序校验 Planner 的动作和置信度，低置信度转为澄清。
@@ -1147,7 +1167,7 @@ def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     design_source = "docs/dev-design.md" if design_path.is_file() else "approved_product_and_constraints"
     # Dev Design 被明确跳过时，以已批准需求及固定实现约束构造开发依据。
     dev_design = (design_path.read_text(encoding="utf-8") if design_path.is_file() else
-                  f"正式产品需求：\n{product}\n\n现有架构：\n{architecture or '无独立架构文档'}"
+                  "正式产品需求见 input；现有架构见 existing_architecture。"
                   f"\n\n项目固定实现约束：\n" + "\n".join(FIXED_PRODUCT_CONSTRAINTS))
     existing = [str(path.relative_to(root)) for path in (root / "product").rglob("*") if path.is_file()]
     required = ["index.html", "styles.css", "app.js", "calculator.test.js", "verify_product.py", "implementation.md"]
@@ -1174,6 +1194,7 @@ write/read 的路径相对任务工作区，不是 product 工作目录。必须
 不存在的文件必须使用 overwrite=false；只有 existing_product_files 明确列出的已有文件才使用 overwrite=true。不要把文件写到工作区根目录。
 优先确保六个必需文件全部存在，再使用 exec 调试；不要在必需文件未齐时反复运行测试或临时诊断命令。正式测试和失败返修由后续 test Step 负责。
 calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Python Playwright 验证已批准需求中的核心行为、异常输入和错误后恢复。
+verify_product.py 必须读取命令行第一个参数作为访问地址，直接连接系统已启动的产品服务；不得自行启动 HTTP 服务或绑定固定端口。
 可使用 exec 执行 node --test calculator.test.js。不得引入生成产品依赖。"""
     if not design_path.is_file():
         instructions += "\n此任务经 Planner 确认无需独立 Dev Design；按 context 的正式产品需求和固定约束实施，不补写虚假的设计文档，也不擅自增加产品行为。"
@@ -1201,7 +1222,7 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
     previous_product = versioned_products[-2].read_text(encoding="utf-8") if len(versioned_products) >= 2 else ""
     dev_design_diff = unified_text_diff(previous_dev_design, dev_design,
                                         versioned_designs[-2].name if len(versioned_designs) >= 2 else "previous-missing",
-                                        "dev-design.md")
+                                        "dev-design.md") if previous_dev_design else ""
     triage_files = sorted((root / "evidence").glob("acceptance-triage-*.json"))
     acceptance_triage = json.loads(triage_files[-1].read_text(encoding="utf-8")) if triage_files else {}
     repair_tools = [schema for schema in TOOL_SCHEMAS
@@ -1218,7 +1239,13 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
     base_context = {"failure_source_step": failure_source,
                     "latest_failure_report": latest_failure_report,
                     "dev_design": dev_design, "design_source": design_source,
-                    "approved_product": product, "existing_architecture": architecture,
+                    "input_source": {"path": "docs/product.md", "sha256": content_hash(product)},
+                    "document_sources": {
+                        "dev_design": {"source": design_source, "sha256": dev_design_hash},
+                        "existing_architecture": {"path": "docs/architecture.md", "sha256": content_hash(architecture)},
+                        "previous_product": {"sha256": content_hash(previous_product)} if previous_product else None,
+                        "previous_dev_design": {"sha256": content_hash(previous_dev_design)} if previous_dev_design else None},
+                    "existing_architecture": architecture,
                     "existing_product_files": existing,
                     "current_product_files": current_product_files,
                     "acceptance_triage": acceptance_triage,
@@ -1228,9 +1255,25 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
                     "previous_dev_design_hash": lineage.get("dev_design_hash"),
                     "repair_round": task.repair_round}
     repair_feedback = None
+    # 旧报告无法证明生成时的代码版本，不把当前哈希伪装成历史验证快照。
+    failure_evidence_source = {"step_run_id": previous_failed.id if previous_failed else None,
+                               "source": "step_error" if failure_source == Step.start_product.value else str(report_path.relative_to(root)),
+                               "file_snapshot": "unknown", "sha256": content_hash(latest_failure_report)}
     max_attempts = MAX_NO_CHANGE_CORRECTIONS + 1 if is_revision else 1
     for repair_attempt in range(1, max_attempts + 1):
         attempt_before = {path: path.read_bytes() for path in required_paths if path.is_file()}
+        base_context = {**base_context,
+                        "snapshot": {"step_run_id": run.id, "repair_attempt": repair_attempt,
+                                     "scope": "attempt_start",
+                                     "file_sha256": {str(path.relative_to(root)): hashlib.sha256(content).hexdigest()
+                                                     for path, content in attempt_before.items()}},
+                        "failure_evidence_source": dict(failure_evidence_source)}
+        # 每轮使用实际文件快照，避免纠正时仍把修改前的代码当作当前代码。
+        if is_revision:
+            base_context = {**base_context, "latest_failure_report": latest_failure_report,
+                            "current_product_files": {
+                                str(path.relative_to(root)): content.decode("utf-8", errors="replace")
+                                for path, content in attempt_before.items()}}
         model_tool_loop(db, task, run, instructions, product,
                         {**base_context, "repair_feedback": repair_feedback}, tools,
                         stop_when=stop_when, tool_schemas=repair_tools)
@@ -1258,6 +1301,12 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
                                  and "[SKIP]" not in validation.output.get("stdout", ""))
             if validation_passed:
                 break
+            # 最新受控验证结果替代旧报告，后续无写入纠正也必须保留本次错误。
+            latest_failure_report = json.dumps(validation.__dict__, ensure_ascii=False, default=str)
+            failure_evidence_source = {"step_run_id": run.id, "repair_attempt": repair_attempt,
+                                       "source": "controlled_validation", "sha256": content_hash(latest_failure_report),
+                                       "file_snapshot": {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                                         for path in required_paths}}
             repair_feedback = {
                 "attempt": repair_attempt,
                 "message": "文件虽有变化，但最初失败的验证仍未通过。请根据本次真实输出继续修复，不得只运行其他测试。",
@@ -1276,7 +1325,7 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
             break
         hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
                   for path in required_paths}
-        repair_feedback = {
+        repair_feedback = {**(repair_feedback or {}),
             "attempt": repair_attempt,
             "message": "你已结束本轮返修，但六个必需文件均未产生实际内容变化。模型文本中的已修改声明不算修改。请根据失败报告重新诊断，并通过 write 实际修改相关文件。",
             "failure_source_step": failure_source,
@@ -1289,6 +1338,8 @@ calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Pyt
                           {"attempt": repair_attempt, "failure_source_step": failure_source})
         db.commit()
         if repair_attempt == max_attempts:
+            if "validation_result" in repair_feedback:
+                raise RuntimeError("repair_made_no_changes:latest_validation_failed")
             raise RuntimeError("repair_made_no_changes")
     # 更新实现依据的哈希和来源，便于后续设计变化时识别需要增量修改。
     write_json_atomic(lineage_path, {"dev_design_hash": dev_design_hash,
