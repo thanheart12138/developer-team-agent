@@ -2,6 +2,8 @@
 
 ## 当前阶段
 
+2026-09-19：按用户确认将新任务从真人式全量计划／逐单元文档交接改为 AI 原生逐业务切片闭环。架构只创建绑定上游哈希的 delivery-plan；Dev Design 只生成第一张结构化执行卡；Develop 在当前切片自测和程序真实 Node 回归通过后才规划下一片。新增 slice-planner／slice-developer v1、最多 12 片、Step 总调用预算不重置、纯测试／文档／验证切片拒绝、REPLAN 内部调整和 BLOCKED 关键决策边界；全部完成后保留全量测试、HTTP、浏览器和人工验收。已有 development-plan 任务继续原恢复入口。全量 185 项回归、Python 编译、提示词哈希及差异检查通过；Fake 模型＋真实 Node 验证一片实现后才规划 complete。尚未运行真实 Provider，不宣称素材管理完整交付或 Token 改善。证据见 `docs/evidence/slice-workflow-validation.md`。
+
 2026-09-19：完成素材管理提示词 v2 真实 DeepSeek 全链路评测。v2 按数据所有权把计划从 v1 的 11 单元降到 9 单元，但仍错误拆出 verification 单元；流程在 tasks_unit Dev Design 连续五轮无法调和来源上下文验收与未声明 topics／materials 依赖，最终 `failed / dev_design / unit_design_review_failed`，未进入开发。实际 34 HTTP，输入 302,129／输出 45,697／总计 347,826 Token；产品 18,550、架构 61,957、Dev Design 267,319。因完成阶段比 v1 的 develop 更早，低消耗不计为优化成功。v2 结果和证据完整保留，注册表已恢复激活 v1，下一版需让规划器同时校验验收行为、依赖和唯一所有权形成闭环。
 
 2026-09-19：按用户确认开始优化开发单元拆分，并完成提示词版本升级。`unit-planner`、`design-author`、`design-reviewer` 从 v1 升为 v2，旧版本保留；规划器先确定核心数据／状态／业务规则的唯一所有者，默认一个业务模块一个单元，只允许按独立生命周期、独立公共接口或独立跨模块业务结果继续拆分，禁止按搜索、校验、页面控件、测试或文件名拆分；设计生成和评审同步保持边界并阻止第二数据所有者。新增素材管理 v2 待评测清单，目标是在需求覆盖和完成度不下降时少于原 11 单元，并降低 Dev Design 的 7,748,016 Token。全量 183 项回归通过，提示词哈希、Python 编译与差异检查通过；尚未执行真实模型评测，不宣称单元数或 Token 已下降。
@@ -286,6 +288,8 @@ Planner 只允许返回以下动作：
 - v1 只有路径与进程级最小隔离，不是真正的安全沙箱；不得用于执行不可信需求或访问真实个人数据。
 
 ## 最近验证证据
+
+- 2026-09-19：真实 DeepSeek 从空工作区运行素材管理逐业务切片流程，111 次 HTTP 尝试、105 次有效响应、1,602,673 Token；产品、架构和首片 Dev Design 完成，未要求用户处理内部决策，但最终 `failed / develop`，未进入全量测试、启动或浏览器验收。Dev Design 降至 17,460 Token，Develop 升至 1,533,615。实测发现程序把只运行 7 个 storage 断言的复用测试误当成后续 8 张切片通过，第 10 张完整 UI 交付片又因范围和上下文过大耗尽 100 次调用。已修复内部校验误澄清及缺固定入口时直接失败，并增加回归测试；测试覆盖绑定和 Developer 上下文收敛仍为当前阻塞。证据见 `docs/evidence/slice-workflow-validation.md` 和 `/private/tmp/content-workbench-slice-v1-20260919`。
 
 - 2026-09-19：按用户授权修复素材管理全链路的计划归一、澄清传播、Reviewer 协议重试、公共操作唯一所有权、内部契约自动裁决、Dev Design 5000 字符上限与协议压缩反馈，以及自测通过后的单次提交窗口。修复后真实 DeepSeek 从空工作区完成产品、架构和逐单元 Dev Design，进入开发；四个单元通过并提交，`topics-crud` 因测试共享模块状态未收敛，第二次有界开发恢复遇到 HTTP 错误，最终仍为 `failed / develop`，未进入全量测试、启动或浏览器验收。实际 225 次 HTTP，总计 10,338,932 Token；Dev Design 占 7,748,016。证据见 `docs/evidence/content-workbench-baseline.md` 和 `/private/tmp/content-workbench-fixed-fullflow-20260919`。完成优先机制有进展，Token 目标未达成。
 

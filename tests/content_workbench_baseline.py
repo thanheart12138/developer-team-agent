@@ -19,7 +19,7 @@ os.environ['SIMULATOR_WORKSPACE_ROOT'] = str(root / 'workspace')
 import httpx
 from sqlalchemy import select
 from backend.app.database import Base, engine, SessionLocal
-from backend.app.models import Event, Message, Step, StepRun, Task, TaskStatus, TraceRecord
+from backend.app.models import Event, Message, Step, StepRun, StepStatus, Task, TaskStatus, TraceRecord
 from backend.app.runtime import model, worker
 from backend.app.runtime.tracing import sanitize
 
@@ -70,17 +70,32 @@ requirement += '\n\n本次用户确认的执行约束：原生 JavaScript 多模
 print('ROOT', root, flush=True)
 with SessionLocal() as db:
     diagnostic = '--verify-existing' in sys.argv
-    task = Task(task_name='content workbench diagnostic verification' if diagnostic else 'content workbench DeepSeek baseline', status=TaskStatus.pending, cur_step=Step.test if diagnostic else Step.product_docs)
-    db.add(task)
-    db.flush()
-    task.workspace_path = str(root / 'workspace' / str(task.id))
-    if diagnostic:
-        source_root = Path(sys.argv[sys.argv.index('--verify-existing') + 1])
-        for directory in ('docs', 'product'):
-            shutil.copytree(source_root / 'workspace/1' / directory, Path(task.workspace_path) / directory)
-        requirement = '原始自动任务失败；本任务仅独立验证其已有生成产物，不计为完整基准成功。\n' + requirement
-    db.add(Message(task_id=task.id, role='user', content=requirement))
-    db.commit()
+    resume = '--resume' in sys.argv
+    if resume:
+        task = db.scalar(select(Task).order_by(Task.id))
+        if task is None:
+            raise RuntimeError('resume_task_missing')
+        if ('--resume-internal' in sys.argv and task.status in {TaskStatus.waiting_user, TaskStatus.failed}
+                and task.cur_step == Step.develop):
+            latest_run = db.scalar(select(StepRun).where(StepRun.task_id == task.id).order_by(StepRun.id.desc()))
+            task.status = TaskStatus.running
+            task.failure_reason = None
+            latest_run.status = StepStatus.running
+            latest_run.error = None
+            latest_run.finished_at = None
+            db.commit()
+    else:
+        task = Task(task_name='content workbench diagnostic verification' if diagnostic else 'content workbench DeepSeek baseline', status=TaskStatus.pending, cur_step=Step.test if diagnostic else Step.product_docs)
+        db.add(task)
+        db.flush()
+        task.workspace_path = str(root / 'workspace' / str(task.id))
+        if diagnostic:
+            source_root = Path(sys.argv[sys.argv.index('--verify-existing') + 1])
+            for directory in ('docs', 'product'):
+                shutil.copytree(source_root / 'workspace/1' / directory, Path(task.workspace_path) / directory)
+            requirement = '原始自动任务失败；本任务仅独立验证其已有生成产物，不计为完整基准成功。\n' + requirement
+        db.add(Message(task_id=task.id, role='user', content=requirement))
+        db.commit()
     for iteration in range(200):
         db.refresh(task)
         print('STATE', iteration, task.status.value, task.cur_step.value, flush=True)

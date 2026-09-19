@@ -1199,6 +1199,11 @@ def design_clarifications(db: Session, task: Task) -> list[str]:
 def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntime, kind: str):
     # 处理架构或 Dev Design 的规划、评审和正式化。
     root = workspace_for(task)
+    if kind == "dev_design" and (root / "docs/delivery-plan.json").is_file():
+        # 新任务只规划第一张业务切片，后续依据真实实现和测试逐片规划。
+        from .slice_workflow import handle_design as handle_slice_design
+        handle_slice_design(db, task, run, tools)
+        return
     if kind == "dev_design" and (root / "docs/development-plan.json").is_file():
         # 有正式模块计划时分别评审共享契约与每个单元，不再生成巨大的单份设计。
         from .unit_workflow import handle_design
@@ -1228,8 +1233,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
         run.input_path = source
         run.output_path = target
         if kind == "architecture":
-            from .unit_workflow import ensure_plan
-            ensure_plan(db, task, run, tools)
+            from .slice_workflow import ensure_delivery_plan
+            ensure_delivery_plan(db, task, run, tools)
         finish_step(db, task, run, NEXT_STEP[task.cur_step])
         return
 
@@ -1308,8 +1313,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
             run.input_path = source
             run.output_path = formal_version
             if kind == "architecture":
-                from .unit_workflow import ensure_plan
-                ensure_plan(db, task, run, tools)
+                from .slice_workflow import ensure_delivery_plan
+                ensure_delivery_plan(db, task, run, tools)
             finish_step(db, task, run, NEXT_STEP[task.cur_step])
             return
 
@@ -1366,8 +1371,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     run.input_path = source
     run.output_path = formal_version
     if kind == "architecture":
-        from .unit_workflow import ensure_plan
-        ensure_plan(db, task, run, tools)
+        from .slice_workflow import ensure_delivery_plan
+        ensure_delivery_plan(db, task, run, tools)
     finish_step(db, task, run, NEXT_STEP[task.cur_step])
 
 
@@ -1449,6 +1454,11 @@ def check_product_entry(db: Session, task: Task, run: StepRun) -> bool:
 def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     # 根据当前设计开发或返修生成软件并核对实现血缘。
     root = workspace_for(task)
+    if (root / "docs/delivery-plan.json").is_file():
+        # 新任务在开发阶段形成“规划一片—实现—真实测试—再规划”的闭环。
+        from .slice_workflow import handle_develop as handle_slice_develop
+        handle_slice_develop(db, task, run, tools)
+        return
     if (root / "docs/development-plan.json").is_file():
         # 新计划串行执行模块／功能测试闭环，旧任务保留原开发入口。
         from .unit_workflow import handle_develop as handle_unit_develop
@@ -2133,7 +2143,8 @@ def process_task(db: Session) -> bool:
             design_target = ("architecture.md" if task.cur_step == Step.architecture_docs
                              else "dev-design.md")
             if (not (workspace_for(task) / "docs" / design_target).is_file()
-                    and not (task.cur_step == Step.dev_design and (workspace_for(task) / "docs/development-plan.json").is_file())):
+                    and not (task.cur_step == Step.dev_design and any((workspace_for(task) / path).is_file()
+                        for path in ("docs/development-plan.json", "docs/delivery-plan.json")))):
                 action = plan_initial_design_action(db, task, run, tools)
                 if action in {"clarify", "modify_code"}:
                     return True

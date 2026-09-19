@@ -17,7 +17,7 @@
 
 第一版及关键决定归用户所有。未经明确委托，AI 不代写、不预填、不悄悄改写用户原文。后续文档应标明当前有效版本和确认状态；更新时检查受影响的实现和测试。
 
-任务工作区新增的逐单元设计目录采用 `docs/dev-design/vN/`：先保存共享交互契约，随后保存按模块／功能 ID 命名的候选、评审和正式设计；根级 dev-design.md 只保存索引与哈希。测试与恢复进度保存到任务 `evidence/units/` 和 development-progress.json；不在项目治理文档目录生成被开发软件文件。
+新任务工作区使用 `docs/delivery-plan.json` 标识逐业务切片流程，执行卡保存到 `docs/slices/`，根级 `dev-design.md` 只保存切片索引；测试与恢复进度保存到 `evidence/slice-progress.json` 和 `evidence/slices/`。已有逐单元任务仍使用 `docs/dev-design/vN/`、`evidence/units/` 和 `development-progress.json` 恢复；不在项目治理文档目录生成被开发软件文件。
 
 ## 架构问题记录
 
@@ -28,6 +28,7 @@
 ## 评审与证据
 
 - `docs/evidence/unit-workflow-validation.md`：模块／功能独立设计、程序逐单元测试修复与恢复机制，137 项回归、三十次真实 DeepSeek 部分验证及完整流程未通过的限制。
+- `docs/evidence/slice-workflow-validation.md`：逐业务切片规划、真实测试后再规划、内部重规划边界及旧任务兼容的机制验证。
 - `docs/evidence/unit-workflow-300-validation.md`：累计预算提高到 300 次后的续测，实际 40 次；固定设计开发链路通过，自主流程仍因开发计划单元重叠失败。
 - `docs/evidence/current-only-context-validation.md`：去掉自动工具历史及摘要的真实对照、读取全文去重复测与用量；重复读取、完整自主流程未通过及正式策略未切换。
 - `docs/evidence/effective-tool-state-validation.md`：复用账本聚合有效文件状态、142 项回归及真实探针；26 次模型调用，生成验证脚本错误与返修责任澄清、完整交付未通过。
