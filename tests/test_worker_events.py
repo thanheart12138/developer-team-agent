@@ -1,3 +1,4 @@
+import copy
 import json
 import hashlib
 from pathlib import Path
@@ -12,6 +13,7 @@ from backend.app.models import (Event, EventStatus, Message, Step, StepRun, Step
                                 TraceRecord)
 from backend.app.runtime.contracts import ModelResult, ToolCall, ToolResult
 from backend.app.runtime.model import ModelProtocolError
+from backend.app.runtime.prompt_registry import load_prompt
 from backend.app.runtime.tools import ToolRuntime
 from backend.app.runtime.worker import (create_step_run, execute_tool, handle_develop, handle_product_docs, handle_verify,
                                         handle_reviewed_doc, model_tool_loop, process_pending_event, process_task,
@@ -234,6 +236,41 @@ def test_process_task_uses_initial_planner_before_generating_design(tmp_path, mo
         assert not (tmp_path / "docs/dev-design.md").is_file()
         assert db.scalar(select(TraceRecord).where(
             TraceRecord.type == "initial_design_plan")).metadata_json["action"] == "modify_code"
+
+
+def test_initial_design_clarification_answer_invalidates_cached_decision(tmp_path, monkeypatch):
+    # 产品批准后的新回答必须使旧 clarify 决定失效并重新规划。
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "evidence").mkdir()
+    product = "四个模块，优先级待确认。"
+    (tmp_path / "docs/product.md").write_text(product, encoding="utf-8")
+    (tmp_path / "evidence/initial-architecture-decision-v1.json").write_text(json.dumps({
+        "action":"clarify", "reason":"优先级未确认", "evidence":["优先级待确认"],
+        "unresolved_decisions":["优先级"], "confidence":0.9, "clarifying_question":"优先级？",
+        "document_hashes":{"product":hashlib.sha256(product.encode()).hexdigest(),
+                           "architecture":hashlib.sha256(b"").hexdigest()}
+    }), encoding="utf-8")
+    captured = []
+
+    def fake_loop(db, task, run, instructions, input_text, context, tools, **kwargs):
+        captured.append(context)
+        return json.dumps({"action":"update_architecture", "reason":"回答后需生成架构",
+                           "evidence":["优先级固定为高／中／低"], "unresolved_decisions":[],
+                           "confidence":0.95, "clarifying_question":None}, ensure_ascii=False)
+
+    monkeypatch.setattr("backend.app.runtime.worker.model_tool_loop", fake_loop)
+    with SessionLocal() as db:
+        task = Task(task_name="answer invalidates", cur_step=Step.architecture_docs,
+                    status=TaskStatus.running, workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        db.add_all([Message(task_id=task.id, role="user", content="批准产品文档"),
+                    Message(task_id=task.id, role="user", content="优先级固定为高／中／低")])
+        run = StepRun(task_id=task.id, step=Step.architecture_docs,
+                      status=StepStatus.running, attempt=1)
+        db.add(run); db.commit()
+        assert plan_initial_design_action(db, task, run, ToolRuntime(tmp_path)) == "update_architecture"
+        assert len(captured) == 1
+        assert captured[0]["confirmed_design_answers"] == ["优先级固定为高／中／低"]
 
 
 def test_develop_uses_approved_product_when_dev_design_was_explicitly_skipped(tmp_path, monkeypatch):
@@ -728,7 +765,47 @@ def test_requirement_change_without_behavior_contract_waits_for_user(tmp_path, m
         assert task.cur_step == Step.verify_product
 
 
+def test_reviewed_document_receives_answers_after_product_approval(tmp_path, monkeypatch):
+    # 设计门径和作者共享审批后的决定，不能继续使用产品文档中的旧待确认表述。
+    monkeypatch.setattr("backend.app.runtime.unit_workflow.ensure_plan", lambda *args: None)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "product.md").write_text("优先级待确认。", encoding="utf-8")
+    captured = []
+
+    def fake_loop(db, task, run, instructions, input_text, context, tools, **kwargs):
+        captured.append((instructions, context))
+        if "architecture-draft.md" in instructions:
+            (docs / "architecture-draft.md").write_text("优先级为高中低", encoding="utf-8")
+        elif "architecture-review.md" in instructions:
+            (docs / "architecture-review.md").write_text("无阻塞问题", encoding="utf-8")
+        else:
+            (docs / "architecture-v1.md").write_text("正式架构：优先级为高中低", encoding="utf-8")
+        return "done"
+
+    monkeypatch.setattr("backend.app.runtime.worker.model_tool_loop", fake_loop)
+    with SessionLocal() as db:
+        task = Task(task_name="answers", cur_step=Step.architecture_docs,
+                    status=TaskStatus.running, workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        db.add_all([Message(task_id=task.id, role="user", content="原始需求"),
+                    Message(task_id=task.id, role="user", content="批准产品文档"),
+                    Message(task_id=task.id, role="user", content="优先级固定为高／中／低")])
+        run = StepRun(task_id=task.id, step=Step.architecture_docs,
+                      status=StepStatus.running, attempt=1)
+        db.add(run); db.commit()
+        handle_reviewed_doc(db, task, run, ToolRuntime(tmp_path), "architecture")
+        assert len(captured) == 3
+        assert all(context["confirmed_design_answers"] == ["优先级固定为高／中／低"]
+                   for _, context in captured)
+        assert "必须吸收这些决定" in captured[0][0]
+        assert "必须吸收这些决定" in captured[-1][0]
+        assert task.cur_step == Step.dev_design
+
+
 def test_reviewed_document_revision_does_not_skip_existing_formal_file(tmp_path, monkeypatch):
+    # 此用例仅验证旧文档增量修订，模块计划生成另有独立流程测试。
+    monkeypatch.setattr("backend.app.runtime.unit_workflow.ensure_plan", lambda *args: None)
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "product.md").write_text("revised product", encoding="utf-8")
@@ -770,6 +847,8 @@ def test_reviewed_document_revision_does_not_skip_existing_formal_file(tmp_path,
 
 
 def test_reviewed_document_revision_can_reuse_previous_formal(tmp_path, monkeypatch):
+    # 此用例仅验证旧文档复用，模块计划生成另有独立流程测试。
+    monkeypatch.setattr("backend.app.runtime.unit_workflow.ensure_plan", lambda *args: None)
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "product.md").write_text("same product", encoding="utf-8")
@@ -1327,12 +1406,41 @@ def test_kimi_transport_failure_falls_back_to_deepseek_in_same_logical_call(tmp_
         assert [row.metadata_json["provider"] for row in providers] == ["kimi", "deepseek"]
 
 
+def test_model_request_trace_records_prompt_identity_and_context_hash(tmp_path, monkeypatch):
+    """版本化提示词调用必须留下可用于基线对比的身份与上下文哈希。"""
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call",
+                        lambda runtime, task_id, request: ModelResult(
+                            request.request_id, 1, "OK", [], "completed"))
+    with SessionLocal() as db:
+        task = Task(task_name="prompt-trace", cur_step=Step.develop,
+                    status=TaskStatus.running, workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1,
+                      checkpoint_path=str(tmp_path / "evidence/checkpoint.json"))
+        db.add(run); db.commit()
+        prompt = load_prompt("unit-developer")
+
+        assert model_tool_loop(db, task, run, prompt, "input", {"unit": {"id": "asset"}},
+                               ToolRuntime(tmp_path), tool_schemas=[]) == "OK"
+
+        trace = db.scalars(select(TraceRecord).where(
+            TraceRecord.task_id == task.id, TraceRecord.type == "model_request"
+        )).one()
+        assert trace.metadata_json["prompt_name"] == "unit-developer"
+        assert trace.metadata_json["prompt_version"] == "v1"
+        assert trace.metadata_json["prompt_template_sha256"] == prompt.template_sha256
+        assert trace.metadata_json["prompt_rendered_sha256"] == prompt.rendered_sha256
+        assert len(trace.metadata_json["runtime_context_sha256"]) == 64
+
+
 def test_model_loop_retries_invalid_tool_call_as_new_logical_call(tmp_path, monkeypatch):
     calls = 0
+    contexts = []
 
     def invalid_then_valid(runtime, task_id, request):
         nonlocal calls
         calls += 1
+        contexts.append(copy.deepcopy(request.context))
         if calls == 1:
             raise ModelProtocolError("invalid_tool_call", {"choices": [{"message": {
                 "tool_calls": [{"function": {"arguments": "{broken"}}],
@@ -1356,6 +1464,8 @@ def test_model_loop_retries_invalid_tool_call_as_new_logical_call(tmp_path, monk
                         stop_when=lambda: (tmp_path / "docs/output.md").is_file())
 
         assert calls == 2
+        assert contexts[1]["model_protocol_feedback"]["error"] == "invalid_tool_call"
+        assert "压缩输出" in contexts[1]["model_protocol_feedback"]["instruction"]
         assert run.model_call_count == 2
         failed = db.scalar(select(TraceRecord).where(
             TraceRecord.task_id == task.id,
@@ -1422,6 +1532,9 @@ def test_kimi_provider_is_recorded_in_model_traces(tmp_path, monkeypatch):
 
 def test_browser_verification_skip_cannot_pass_acceptance(tmp_path, monkeypatch):
     (tmp_path / "evidence").mkdir()
+    (tmp_path / "product").mkdir()
+    for name in ("index.html", "verify_product.py", "implementation.md", "product.test.js"):
+        (tmp_path / "product" / name).write_text("", encoding="utf-8")
 
     class FakeTools:
         def execute(self, call):
@@ -1487,7 +1600,7 @@ def test_repair_runs_develop_even_when_all_required_files_exist(tmp_path, monkey
         assert captured["repair_round"] == 1
         assert captured["latest_failure_report"] == "three failures"
         assert captured["current_product_files"]["product/app.js"] == "old"
-        assert {schema["function"]["name"] for schema in captured["tool_schemas"]} == {"write", "exec"}
+        assert {schema["function"]["name"] for schema in captured["tool_schemas"]} == {"write", "exec", "read"}
         assert (product_dir / "app.js").read_text(encoding="utf-8") == "fixed"
         assert task.cur_step == Step.test
 

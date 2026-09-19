@@ -1,0 +1,48 @@
+{
+  "evaluation_id": "material-management-candidate-v2",
+  "scenario": "content-workbench-full-flow",
+  "date": "2026-09-19",
+  "compares_to": "material-management-baseline-v1",
+  "prompt_versions": {
+    "unit-planner": "v2",
+    "design-author": "v2",
+    "design-reviewer": "v2",
+    "integration-repair-diagnoser": "v1",
+    "unit-developer": "v1"
+  },
+  "change_hypothesis": "按数据所有权和业务边界形成最少开发单元，并在设计生成与评审中保持边界，可减少重复职责、逐单元设计调用和后续用户干预。",
+  "expected_effect": {
+    "planned_units": "lower_than_11_without_losing_requirement_coverage",
+    "dev_design_tokens": "lower_than_7748016_if_completion_does_not_regress",
+    "user_clarifications": "no_internal_ownership_questions"
+  },
+  "result": {
+    "status": "failed",
+    "terminal_step": "dev_design",
+    "failure_reason": "unit_design_review_failed",
+    "http_requests": 34,
+    "input_tokens": 302129,
+    "output_tokens": 45697,
+    "total_tokens": 347826,
+    "stage_tokens": {
+      "product_docs": 18550,
+      "architecture_docs": 61957,
+      "dev_design": 267319
+    },
+    "planned_units": 9,
+    "passed_units": 0,
+    "entered_develop": false,
+    "entered_full_test": false,
+    "entered_browser_verification": false,
+    "failed_unit": "tasks_unit",
+    "design_candidates_for_failed_unit": 5
+  },
+  "assessment": {
+    "unit_count_improved": true,
+    "completion_regressed": true,
+    "token_improvement_accepted": false,
+    "reason": "单元数从 11 降到 9，但流程从 develop 回退到 dev_design；较低 Token 来自提前失败。tasks_unit 的来源上下文验收与其声明依赖边界冲突，Author 和 Reviewer 五轮未能在现有计划内收敛。"
+  },
+  "evidence_root": "/private/tmp/content-workbench-prompt-v2-20260919",
+  "status": "evaluated_failed_reverted"
+}

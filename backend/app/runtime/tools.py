@@ -1,10 +1,12 @@
 import os
+import hashlib
 import signal
 import subprocess
 import tempfile
 from pathlib import Path
 
 from .contracts import ToolCall, ToolResult
+from .tool_summaries import ToolSummaryStore
 
 MAX_BYTES = 100 * 1024
 COMMAND_TIMEOUT = 60
@@ -44,7 +46,9 @@ class ToolRuntime:
         except AttributeError:
             return ToolResult(call.call_id, call.tool_name, "failed", error="unknown_tool")
         try:
-            return ToolResult(call.call_id, call.tool_name, "succeeded", handler(**call.parameters))
+            # 操作目的仅供摘要登记，不改变底层工具参数与执行语义。
+            parameters = {key: value for key, value in call.parameters.items() if key != "description"}
+            return ToolResult(call.call_id, call.tool_name, "succeeded", handler(**parameters))
         except Exception as exc:
             return ToolResult(call.call_id, call.tool_name, "failed", error=str(exc))
 
@@ -52,8 +56,22 @@ class ToolRuntime:
         # 读取当前工作区文件并限制返回长度。
         # 所有读写先经过工作区路径校验。
         target = self._safe_path(path)
-        content, truncated = self._limited(target.read_bytes())
-        return {"path": path, "content": content, "truncated": truncated}
+        encoded = target.read_bytes()
+        content, truncated = self._limited(encoded)
+        return {"path": path, "content": content, "truncated": truncated,
+                "sha256": hashlib.sha256(encoded).hexdigest()}
+
+    def _get_file_change_history(self, file_path: str, cursor: int | None = None) -> dict:
+        # 查询当前任务内的文件写入历史及当前版本一致性。
+        return ToolSummaryStore(self.workspace).file_history(file_path, cursor)
+
+    def _get_model_call_summaries(self, model_call_id: str, cursor: int | None = None) -> dict:
+        # 查询指定模型调用发起的一批工具执行摘要。
+        return ToolSummaryStore(self.workspace).model_call(model_call_id, cursor)
+
+    def _get_tool_execution_detail(self, summary_id: str, section: str = "result", cursor: int | None = None) -> dict:
+        # 分页读取原始历史工具证据，不重新执行工具或读取其他任务。
+        return ToolSummaryStore(self.workspace).detail(summary_id, section, cursor)
 
     def _write(self, path: str, content: str, overwrite: bool) -> dict:
         # 按覆盖标记原子写入文件并校验写入结果。
@@ -149,3 +167,24 @@ TOOL_SCHEMAS = [
      "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["run", "start", "stop", "status"]},
       "command": {"type": "string"}, "process_id": {"type": "integer"}}, "required": ["action"]}}},
 ]
+
+QUERY_TOOL_SCHEMAS = [
+    {"type": "function", "function": {"name": "get_file_change_history",
+     "description": "Get this task's successful writes to a file, newest first, with SHA-256 and model call IDs",
+     "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "cursor": {"type": "integer", "minimum": 0}},
+                    "required": ["file_path"]}}},
+    {"type": "function", "function": {"name": "get_model_call_summaries",
+     "description": "Get this task's tool execution summaries for one model call ID in execution order",
+     "parameters": {"type": "object", "properties": {"model_call_id": {"type": "string"}, "cursor": {"type": "integer", "minimum": 0}},
+                    "required": ["model_call_id"]}}},
+    {"type": "function", "function": {"name": "get_tool_execution_detail",
+     "description": "Read historical evidence by summary ID, never re-execute. Use read for current file content. Continue using next_cursor",
+     "parameters": {"type": "object", "properties": {"summary_id": {"type": "string"},
+                    "section": {"type": "string", "enum": ["call", "result", "all"]}, "cursor": {"type": "integer", "minimum": 0}},
+                    "required": ["summary_id"]}}},
+]
+
+# 模型可提供简短目的，旧工具记录与程序发起调用仍允许缺省。
+for schema in TOOL_SCHEMAS + QUERY_TOOL_SCHEMAS:
+    schema["function"]["parameters"]["properties"]["description"] = {
+        "type": "string", "maxLength": 200, "description": "Brief purpose of this operation; not a claim of success"}

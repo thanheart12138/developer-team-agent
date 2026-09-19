@@ -1,6 +1,7 @@
 import json
 import difflib
 import hashlib
+import logging
 import shlex
 import shutil
 import socket
@@ -8,8 +9,10 @@ import sys
 import time
 import uuid
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from sqlalchemy import func, select
@@ -20,7 +23,9 @@ from ..database import SessionLocal
 from ..models import Event, EventStatus, Message, Step, StepRun, StepStatus, Task, TaskStatus, TraceRecord
 from .contracts import ModelRequest, ToolCall, ToolResult
 from .model import ModelProtocolError, create_model_runtime
-from .tools import TOOL_SCHEMAS, ToolRuntime
+from .prompt_registry import PromptContent, sha256_text
+from .tools import TOOL_SCHEMAS, QUERY_TOOL_SCHEMAS, ToolRuntime
+from .tool_summaries import ToolSummaryStore
 from .tracing import publish_live_response, safe_record_trace
 
 NEXT_STEP = {
@@ -31,7 +36,7 @@ NEXT_STEP = {
     Step.start_product: Step.verify_product,
 }
 FIXED_PRODUCT_CONSTRAINTS = [
-    "原生 HTML、CSS、JavaScript 单模块软件", "使用 Node 内置测试框架",
+    "原生 HTML、CSS、JavaScript 软件，按确认架构划分模块和可测试功能", "使用 Node 内置测试框架",
     "使用 Python Playwright 验证真实浏览器", "本地 HTTP 启动与健康检查",
     "本地 HTTP 服务仅用于 Worker 预览和验证，不是生成产品的外部接口或主动网络请求",
     "不引入生成产品依赖或数据存储",
@@ -54,6 +59,16 @@ def _action_signature(action: ToolCall) -> str:
     # 把工具动作转换为可比较的稳定签名。
     return json.dumps({"tool_name": action.tool_name, "parameters": action.parameters},
                       ensure_ascii=False, sort_keys=True)
+
+
+def unit_idle_calls(history: list[dict], versions: dict) -> int:
+    # 按文件版本统计连续无进展模型批次，交替读取或修改描述也不能绕过。
+    batches = set()
+    for entry in reversed(history):
+        if entry.get('unit_versions_before') != versions or entry.get('unit_versions_after') != versions:
+            break
+        batches.add(entry.get('model_request_id'))
+    return len(batches)
 
 
 def _recent_action_count(entries: list[dict], history_key: str, signature: str) -> int:
@@ -217,22 +232,35 @@ def create_step_run(db: Session, task: Task) -> StepRun:
     return run
 
 
-def execute_tool(db: Session, task: Task, run: StepRun, tools: ToolRuntime, call: ToolCall):
+def execute_tool(db: Session, task: Task, run: StepRun, tools: ToolRuntime, call: ToolCall,
+                 parent_model_call_id: str | None = None, history_key: str = "system",
+                 blocked_error: str | None = None):
     # 执行工具并记录调用、结果及写入产物。
     started = datetime.utcnow()
-    safe_record_trace(db, task, run, "tool_call", "running", f"调用 {call.tool_name}",
+    store = ToolSummaryStore(workspace_for(task))
+    before = store.file_state(call.parameters.get("path")) if call.tool_name in {"read", "write"} else {}
+    # 在执行前绑定文件版本，验证结束后不能用已修改文件冒充执行时版本。
+    code_hashes = product_code_hashes(task) if call.tool_name == "exec" and call.parameters.get("action") == "run" else {}
+    call_trace = safe_record_trace(db, task, run, "tool_call", "running", f"调用 {call.tool_name}",
                       str(call.parameters.get("path") or call.parameters.get("command") or call.parameters.get("action", "")),
                       {"call_id": call.call_id, "tool_name": call.tool_name, "parameters": call.parameters},
                       started_at=started)
     # 调用受控工具运行时，随后保存完整结果 Trace。
-    result = tools.execute(call)
+    result = ToolResult(call.call_id, call.tool_name, "failed", {}, blocked_error) if blocked_error else tools.execute(call)
     finished = datetime.utcnow()
-    safe_record_trace(db, task, run, "tool_result", result.status,
+    result_trace = safe_record_trace(db, task, run, "tool_result", result.status,
                       f"{call.tool_name} 执行{'成功' if result.status == 'succeeded' else '失败'}",
                       result.error or str(result.output.get("path") or result.output.get("exit_code") or ""),
                       {"call_id": call.call_id, "tool_name": call.tool_name,
                        "result": result.__dict__}, started_at=started, finished_at=finished)
     record_written_artifact(db, task, run, call, result)
+    try:
+        # 摘要保存失败也必须把真实结果交回检查点，不重执行已有副作用。
+        store.record(run.id, history_key, parent_model_call_id, call, result, before,
+                     {"call": call_trace.detail_path if call_trace else None,
+                      "result": result_trace.detail_path if result_trace else None}, code_hashes, bool(blocked_error))
+    except (OSError, ValueError, TypeError) as exc:
+        logging.getLogger(__name__).warning("Tool summary unavailable: %s", type(exc).__name__)
     return result
 
 
@@ -311,13 +339,90 @@ def parse_transition_decision(text: str, kind: str, required_update: bool = Fals
     }
 
 
-def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, input_text: str,
+def build_tool_context(task: Task, run: StepRun, context: dict, history: list[dict], history_key: str) -> dict:
+    # 每次逻辑调用重建工具投影，刷新文件版本，不改变原始检查点。
+    root = workspace_for(task)
+    hashes = product_code_hashes(task)
+    try:
+        projected = ToolSummaryStore(root).project(history, run.id, history_key, hashes)
+    except (OSError, ValueError, TypeError) as exc:
+        # 账本暂不可用时沿用完整历史，保证执行连续性。
+        logging.getLogger(__name__).warning("Tool context projection unavailable: %s", type(exc).__name__)
+        projected = {"tool_history": history, "tool_summaries": [], "summary_unavailable": True}
+    value = {**context, **projected}
+    paths = product_files(root)
+    value["product_file_manifest"] = [
+        {"path": str(path.relative_to(root)), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        for path in paths]
+    if "existing_product_files" in value:
+        value["existing_product_files"] = [str(path.relative_to(root)) for path in paths]
+    if "unit_file_scope" in context:
+        # 单元开发只刷新当前单元与依赖范围，避免轮内读取结果立即丢失。
+        scope = set(context["unit_file_scope"])
+        paths = [path for path in paths if str(path.relative_to(root)) in scope]
+    if context.get("current_product_files") or "unit_file_scope" in context:
+        # 修订阶段继续提供完整当前快照；近期原始交互携带相同全文时不重复。
+        contents = {str(path.relative_to(root)): path.read_text(encoding="utf-8", errors="replace") for path in paths}
+        for entry in projected["tool_history"]:
+            action = entry.get("action", {})
+            parameters = action.get("parameters", {})
+            result = entry.get("result", {})
+            output = result.get("output", {})
+            path = parameters.get("path")
+            content = parameters.get("content") if action.get("tool_name") == "write" else output.get("content") if action.get("tool_name") == "read" and not output.get("truncated") else None
+            if result.get("status") == "succeeded" and path in contents and content == contents[path]:
+                contents.pop(path)
+        value["current_product_files"] = contents
+        value["current_files_omitted_as_recent_fulltext"] = len(paths) - len(contents)
+        requested = []
+        for result in value.get('current_requested_data', []):
+            # 按需读取全文已在当前快照中时只返回引用，原始 Trace／检查点不修改。
+            output = dict(result.get('output') or {})
+            if result.get('tool_name') == 'read' and output.get('content') is not None and not output.get('truncated') and contents.get(output.get('path')) == output['content']:
+                output.pop('content')
+                output['content_source'] = 'current_product_files'
+            requested.append({**result, 'output':output})
+        value['current_requested_data'] = requested
+    if 'unit_file_scope' in context:
+        # 当前单元交接提示依据缺失文件与真实测试反馈，文件存在不等于测试通过。
+        missing = [path for path in context.get('owned_files', context['unit_file_scope']) if not (root / path).is_file()]
+        feedback = context.get('unit_test_feedback')
+        self_test = context.get('unit_self_test')
+        current_versions = {path:hashlib.sha256((root / path).read_bytes()).hexdigest() if (root / path).is_file() else None
+                            for path in (self_test or feedback or {}).get('file_hashes_after', {})}
+        evidence = self_test or feedback
+        matches = bool(evidence and evidence.get('file_hashes_after') == current_versions)
+        state = 'passed' if matches and evidence.get('passed') else 'failed' if matches else 'stale' if evidence else 'not_run'
+        if not context.get('require_unit_submission') and feedback and feedback.get('passed') is False:
+            # 旧无计划入口保留原失败提示，不要求旧报告补齐新增自测协议。
+            state = 'failed'
+        # 旧失败保留修复依据，同时明确当前版本是否仍适用，不把改动视为成功。
+        for field, versions_field in [('unit_test_feedback', 'file_hashes_after'), ('global_failure', 'file_hashes')]:
+            report = context.get(field)
+            if report:
+                versions = report.get(versions_field)
+                current = {path:hashlib.sha256((root / path).read_bytes()).hexdigest() if (root / path).is_file() else None
+                           for path in versions or {}}
+                value[field] = {**report, 'matches_current_files':versions == current if versions is not None else None}
+        value['test_evidence_matches_current_files'] = matches
+        value['development_state'] = {'unit_id':context.get('unit', {}).get('id'), 'missing_owned_files':missing,
+            'test_state':state,
+            'next_action':'develop_missing_files' if missing else 'repair_current_unit_from_test_feedback' if state == 'failed' else
+                'submit_unit_for_test' if state == 'passed' and self_test and context.get('require_unit_submission') else
+                'run_unit_tests' if context.get('require_unit_submission') else 'finish_development_for_program_test',
+            'file_presence_is_not_test_pass':True}
+    return value
+
+
+def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | PromptContent, input_text: str,
                     context: dict, tools: ToolRuntime,
                     stop_when: Callable[[], bool] | None = None,
                     tool_schemas: list[dict] | None = None,
                     history_key: str = "default",
                     runtime_step: Step | None = None) -> str:
     # 在预算内循环调用模型、执行工具并保存过程证据。
+    prompt = instructions if isinstance(instructions, PromptContent) else None
+    instruction_text = prompt.text if prompt else instructions
     checkpoint = Path(run.checkpoint_path) if run.checkpoint_path else None
     checkpoint_entries: list[dict] = []
     history: list[dict] = []
@@ -326,11 +431,48 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, in
         saved = json.loads(checkpoint.read_text(encoding="utf-8"))
         if isinstance(saved, list):
             checkpoint_entries = saved
+            # 对摘要已落盘的执行恢复原始结果，不能重新发起已完成的副作用。
+            store = ToolSummaryStore(workspace_for(task))
+            for index, entry in enumerate(checkpoint_entries):
+                if entry.get("action") and not entry.get("result"):
+                    recovered = store.recover_result(run.id, entry.get("model_request_id"), entry["action"]["call_id"])
+                    if recovered is not None:
+                        entry["result"] = recovered
+                        if recovered.get("status") == "succeeded":
+                            run.last_completed_action_index = max(run.last_completed_action_index, index)
+            save_checkpoint(run, checkpoint_entries)
             history = [entry for entry in checkpoint_entries
                        if entry.get("result") and entry.get("history_key", "default") == history_key]
     # 根据阶段选择主 Provider，技术失败时才尝试受控降级。
     primary_runtime = create_model_runtime(db, runtime_step or task.cur_step)
+    text_without_submit = 0
+    if context.get('require_unit_submission'):
+        # 恢复开发自测证据，过期结果只能作为旧失败依据，不能授权提交。
+        for entry in reversed(history):
+            if entry.get('action', {}).get('tool_name') == 'run_unit_tests' and entry.get('result', {}).get('status') == 'succeeded':
+                output = entry['result'].get('output', {})
+                tools.self_test = output
+                tools.restore_self_test(output)
+                break
+        # 提交与检查点之间中断时恢复版本一致的交接，不靠文件存在推断完成。
+        for entry in reversed(history):
+            if entry.get('action', {}).get('tool_name') == 'submit_unit_for_test' and entry.get('result', {}).get('status') == 'succeeded':
+                if tools.restore_submission(entry['result'].get('output', {})):
+                    return 'SUBMITTED_FOR_TEST'
+                break
     while run.model_call_count < MAX_MODEL_CALLS_PER_STEP:
+        if context.get('require_unit_submission'):
+            from .unit_workflow import file_hashes
+            versions = file_hashes(workspace_for(task), context['owned_files'])
+            idle = unit_idle_calls(history, versions)
+            self_test_current = bool(tools.self_test and tools.restore_self_test(tools.self_test))
+            if idle >= 8 and not self_test_current:
+                raise RuntimeError('unit_development_no_progress')
+            context = {**context, 'unit_self_test':tools.self_test, 'unit_no_progress':{'calls_without_file_change':idle,
+                'instruction':('当前版本自测已通过，下一步只能立即调用 submit_unit_for_test，不要再读取或诊断。'
+                               if self_test_current else
+                               '先自测，通过后提交；确有设计阻塞说明 BLOCKED，禁止重复读取未变文件' if idle >= 4 else ''),
+                'submission_required':True}}
         # 每次逻辑模型调用先计入阶段预算并持久化。
         run.model_call_count += 1
         db.commit()
@@ -343,11 +485,27 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, in
             if time.monotonic() - last_publish >= 0.25:
                 publish_live_response(str(workspace_for(task)), request.request_id, "".join(stream_parts))
                 last_publish = time.monotonic()
-        # 把当前上下文和已执行工具结果送回模型续写。
-        request = ModelRequest(instructions=f"{BASE_INSTRUCTIONS}\n\n{instructions}", input=input_text,
-                               context={**context, "tool_history": history},
-                               tools=TOOL_SCHEMAS if tool_schemas is None else tool_schemas,
-                               request_id=str(uuid.uuid4()), on_delta=on_delta)
+        # 只给执行阶段增加只读查询，保持无工具 Planner 和文档作者的原边界。
+        schemas = TOOL_SCHEMAS if tool_schemas is None else tool_schemas
+        if any(schema["function"]["name"] in {"read", "exec"} for schema in schemas):
+            schemas = schemas + QUERY_TOOL_SCHEMAS
+        tool_instructions = "每次工具调用用 description 简述目的。当前文件版本以 product_file_manifest 为准；tool_summaries 是当前循环按文件合并的最近读取／写入状态，不是历史流水。current_requested_data 返回本次请求的读取／查询数据，content_source=current_product_files 表示全文已在当前快照。已完整读取且哈希未变的文件不要重复读。development_state 是当前单元交接提示，文件齐备不等于测试通过；按 next_action 进行自测、修复或交接；require_unit_submission=true 时必须调用 submit_unit_for_test，普通完成文本不能替代提交。仅可使用本次提供的工具。earlier_summary_count 表示省略的文件状态数。不得把历史执行成功当作当前代码已验证。"
+        if context.get('require_unit_submission'):
+            # 开发自测与后续独立验证分开，旧失败不代表修改后的版本仍失败。
+            tool_instructions += '开发必须先 run_unit_tests 自测，当前版本通过后才 submit_unit_for_test。修改使旧结果过期，应重新自测；unit_self_test 返回真实自测结果，旧 unit_test_feedback/global_failure 是修复依据，不能认定未复测的新版本仍有原错误。'
+        if context.get('require_unit_submission') and context['unit_no_progress']['calls_without_file_change'] >= 4:
+            # 无进展提醒同步提升到系统指令，避免只埋在较长文件上下文中被忽略。
+            tool_instructions += ('【交接提醒】当前版本自测已通过，本轮只能调用 submit_unit_for_test，不要读取、诊断或重新测试。'
+                                  if context['unit_self_test'] and context['unit_self_test'].get('passed') else
+                                  '【无进展提醒】已连续多轮没有文件版本变化，不要再次读取已提供的文件。缺交付文件则补齐；无需修改时先 run_unit_tests，当前版本通过后立即 submit_unit_for_test。确有设计阻塞只输出 BLOCKED: 和具体问题。剩余无进展额度耗尽将停止，不会自动测试或放宽权限。')
+        if any(schema["function"]["name"] == "get_tool_execution_detail" for schema in schemas):
+            tool_instructions += "需要旧操作时用 get_file_change_history 或 get_model_call_summaries，需要原始历史参数/结果时用 get_tool_execution_detail；最新文件内容用 read。"
+        request_id = str(uuid.uuid4())
+        request_context = {**build_tool_context(task, run, context, history, history_key), "model_call_id": request_id}
+        request = ModelRequest(instructions=f"{BASE_INSTRUCTIONS}\n\n{instruction_text}\n\n{tool_instructions}", input=input_text,
+                               context=request_context,
+                               tools=schemas,
+                               request_id=request_id, on_delta=on_delta)
         runtimes = [primary_runtime]
         if primary_runtime.provider == "kimi":
             runtimes.append(create_model_runtime(db, Step.develop))
@@ -363,7 +521,13 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, in
                               {"history_key": history_key, "request_id": request.request_id,
                                "model_call_count": run.model_call_count,
                                "provider": runtime.provider, "model": runtime.model_name,
-                               "fallback": provider_index > 0}, started_at=datetime.utcnow())
+                               "fallback": provider_index > 0,
+                               "prompt_name": prompt.name if prompt else "legacy-inline",
+                               "prompt_version": prompt.version if prompt else "unversioned",
+                               "prompt_template_sha256": prompt.template_sha256 if prompt else sha256_text(instruction_text),
+                               "prompt_rendered_sha256": prompt.rendered_sha256 if prompt else sha256_text(instruction_text),
+                               "runtime_context_sha256": sha256_text(json.dumps(request_context, ensure_ascii=False, sort_keys=True, default=str))},
+                              started_at=datetime.utcnow())
             last_transport_error: Exception | None = None
             protocol_error = None
             # 传输重试与逻辑调用分别计数，并记录每次失败。
@@ -451,6 +615,10 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, in
             db.commit()
             if primary_runtime.provider == "kimi" and runtime.provider == "deepseek":
                 raise RuntimeError(f"model_protocol_failed:{protocol_error.code}") from protocol_error
+            context = {**context, "model_protocol_feedback": {
+                "error": protocol_error.code,
+                "instruction": "上一响应的工具参数无效或被截断。不要原样重试；显著压缩输出，确保工具参数 JSON 完整，并严格遵守指令中的字符上限。",
+            }}
             continue
         db.commit()
         safe_record_trace(db, task, run, "model_response", "succeeded", "收到模型响应",
@@ -465,11 +633,20 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, in
         if tool_schemas == [] and result.actions:
             raise RuntimeError("model_tool_call_not_allowed")
         if not result.actions:
+            if context.get('require_unit_submission') and not result.text.strip().startswith('BLOCKED:'):
+                # 普通完成文本不能绕过显式提交，最多两次纠正后停止。
+                text_without_submit += 1
+                if text_without_submit > MAX_NO_CHANGE_CORRECTIONS:
+                    raise RuntimeError('unit_submission_required')
+                context = {**context, 'submission_feedback':'必须调用 submit_unit_for_test，普通结束文本不代表提交。'}
+                continue
             return result.text
         # 工具执行前保存待办检查点，便于故障恢复。
         for index, action in enumerate(result.actions, start=run.last_completed_action_index + 1):
             entry = {"history_key": history_key, "model_request_id": result.request_id,
                      "action": action.__dict__}
+            if context.get('require_unit_submission'):
+                entry['unit_versions_before'] = file_hashes(workspace_for(task), context['owned_files'])
             entries = checkpoint_entries + [entry]
             save_checkpoint(run, entries)
             signature = _action_signature(action)
@@ -479,17 +656,21 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, in
                                     and _repair_actions_without_write(checkpoint_entries, history_key)
                                     >= MAX_REPAIR_ACTIONS_WITHOUT_WRITE)
             # 阻止连续重复动作和返修中无写入循环。
-            if repeated >= MAX_IDENTICAL_TOOL_ACTIONS or repair_without_write:
+            invalid_submit = (context.get('require_unit_submission') and action.tool_name == 'submit_unit_for_test'
+                              and action is not result.actions[-1])
+            if repeated >= MAX_IDENTICAL_TOOL_ACTIONS or repair_without_write or invalid_submit:
                 # 阻止连续重复动作和返修中无写入循环。
-                code = "repeated_tool_action" if repeated >= MAX_IDENTICAL_TOOL_ACTIONS else "repair_tool_loop_no_write"
-                tool_result = ToolResult(action.call_id, action.tool_name, "failed", {}, code)
+                code = 'submission_must_be_last' if invalid_submit else "repeated_tool_action" if repeated >= MAX_IDENTICAL_TOOL_ACTIONS else "repair_tool_loop_no_write"
                 safe_record_trace(db, task, run, "tool_guard", "failed", "阻止无效工具循环", code,
                                   {"action": action.__dict__, "reason": code},
                                   {"history_key": history_key, "reason": code})
+                tool_result = execute_tool(db, task, run, tools, action, result.request_id, history_key, code)
             else:
                 # 受控工具执行后记录调用、结果和文件产物。
-                tool_result = execute_tool(db, task, run, tools, action)
+                tool_result = execute_tool(db, task, run, tools, action, result.request_id, history_key)
             entry["result"] = tool_result.__dict__
+            if context.get('require_unit_submission'):
+                entry['unit_versions_after'] = file_hashes(workspace_for(task), context['owned_files'])
             history.append(entry)
             checkpoint_entries.append(entry)
             save_checkpoint(run, checkpoint_entries)
@@ -497,7 +678,7 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str, in
                 run.last_completed_action_index = index
             db.commit()
             if tool_result.status == "succeeded" and stop_when and stop_when():
-                return result.text
+                return 'SUBMITTED_FOR_TEST' if context.get('require_unit_submission') else result.text
     raise RuntimeError("model_call_limit_exceeded")
 
 
@@ -552,7 +733,7 @@ def product_code_hashes(task: Task) -> dict[str, str]:
     root = workspace_for(task)
     return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted((root / "product").rglob("*"))
-            if path.is_file() and path.suffix in {".html", ".css", ".js", ".py"}}
+            if path.is_file() and path.suffix in {".html", ".css", ".js", ".cjs", ".mjs", ".py"}}
 
 
 def skipped_design_evidence(task: Task) -> dict[str, dict]:
@@ -907,7 +1088,9 @@ def plan_initial_design_action(db: Session, task: Task, run: StepRun, tools: Too
         # 已确认该设计阶段缺陷时不得再次以简单任务为由跳过。
         allowed = [allowed[0], "clarify"]
     decision_path = root / "evidence" / f"initial-{phase}-decision-v{run.attempt}.json"
-    current_hashes = {"product": content_hash(product), "architecture": content_hash(architecture)}
+    design_answers = design_clarifications(db, task)
+    current_hashes = {"product": content_hash(product), "architecture": content_hash(architecture),
+                      "design_answers": content_hash(json.dumps(design_answers, ensure_ascii=False))}
     decision = None
     if decision_path.is_file():
         # 运行中恢复只复用与当前正式输入完全一致的已校验决定。
@@ -915,11 +1098,9 @@ def plan_initial_design_action(db: Session, task: Task, run: StepRun, tools: Too
         if saved.get("document_hashes") == current_hashes and saved.get("action") in allowed:
             decision = saved
     if decision is None:
-        user_messages = [message.content for message in db.scalars(select(Message).where(
-            Message.task_id == task.id, Message.role == "user").order_by(Message.id)).all()]
         context = {"phase": phase, "input_source": {"path": "docs/product.md", "sha256": content_hash(product)}, "existing_architecture": architecture,
                    "project_constraints": FIXED_PRODUCT_CONSTRAINTS,
-                   "user_messages": user_messages, "allowed_actions": allowed}
+                   "confirmed_design_answers": design_answers, "allowed_actions": allowed}
         for attempt in range(2):
             # Planner 只返回建议，不写文件；非法输出最多纠正一次。
             response = model_tool_loop(
@@ -1003,9 +1184,26 @@ def plan_initial_design_action(db: Session, task: Task, run: StepRun, tools: Too
     return action
 
 
+def design_clarifications(db: Session, task: Task) -> list[str]:
+    # 只传产品批准后的增量回答；更早需求和问答已经固化在正式产品文档中。
+    approval = db.scalar(select(Message).where(
+        Message.task_id == task.id, Message.role == "user", Message.content == "批准产品文档"
+    ).order_by(Message.id.desc()))
+    if approval is None:
+        return []
+    return list(db.scalars(select(Message.content).where(
+        Message.task_id == task.id, Message.role == "user", Message.id > approval.id
+    ).order_by(Message.id)).all())
+
+
 def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntime, kind: str):
     # 处理架构或 Dev Design 的规划、评审和正式化。
     root = workspace_for(task)
+    if kind == "dev_design" and (root / "docs/development-plan.json").is_file():
+        # 有正式模块计划时分别评审共享契约与每个单元，不再生成巨大的单份设计。
+        from .unit_workflow import handle_design
+        handle_design(db, task, run, tools)
+        return
     source = ("docs/product.md" if kind == "architecture" or
               not (root / "docs/architecture.md").is_file() else "docs/architecture.md")
     target = "docs/architecture.md" if kind == "architecture" else "docs/dev-design.md"
@@ -1016,14 +1214,22 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     formal_version = target.replace(".md", f"-v{run.attempt}.md")
     previous_formal_version = target.replace(".md", f"-v{run.attempt - 1}.md")
     source_text = (root / source).read_text(encoding="utf-8")
+    confirmed_answers = design_clarifications(db, task)
+    answer_context = {"confirmed_design_answers": confirmed_answers}
+    answer_instruction = ("审批后的 confirmed_design_answers 是用户最新明确决定，优先于上游文档残留的待确认旧表述；"
+                          "必须吸收这些决定，不得继续写成待确认。" if confirmed_answers else "")
     label = "架构设计" if kind == "architecture" else "Dev Design"
-    extra = "固定单模块，并明确接口、数据、状态、流程和失败处理。" if kind == "dev_design" else ""
+    extra = ("明确接口、数据、状态、流程和失败处理。" if kind == "dev_design" else
+             "按职责划分模块，定义依赖、数据所有权、公共接口与跨模块流程；较大模块按可独立测试的功能拆分。采用最少且完整可验收的单元，测试、文档和验证脚本归属相应功能，不单独拆成业务模块或功能。测试固定 Node 内置框架，真实浏览器固定 Python Playwright 且只连接系统提供 URL；不得新增 npm Playwright 或自行启动验证服务。保持精简，函数内部详细设计留给逐单元 Dev Design。")
     if not revision and (root / target).is_file():
         # 首版正式文件已经存在时补存版本快照并跳过重复生成。
         if not (root / formal_version).is_file():
             atomic_copy(root / target, root / formal_version)
         run.input_path = source
         run.output_path = target
+        if kind == "architecture":
+            from .unit_workflow import ensure_plan
+            ensure_plan(db, task, run, tools)
         finish_step(db, task, run, NEXT_STEP[task.cur_step])
         return
 
@@ -1101,6 +1307,9 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
             atomic_copy(previous_version, root / target)
             run.input_path = source
             run.output_path = formal_version
+            if kind == "architecture":
+                from .unit_workflow import ensure_plan
+                ensure_plan(db, task, run, tools)
             finish_step(db, task, run, NEXT_STEP[task.cur_step])
             return
 
@@ -1108,14 +1317,16 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
         # 修订以旧正式文档为基线；首次生成直接使用当前正式上游。
         if revision:
             instructions = (f"以旧{label}为唯一基线，根据上游差异和影响判断进行局部修订，只写入 {draft}，"
-                            f"write 必须使用 overwrite=false。不得重写 preserved_sections，不得引入无上游依据的变化。{extra}")
+                            f"write 必须使用 overwrite=false。不得重写 preserved_sections，不得引入无上游依据的变化。"
+                            f"{extra}{answer_instruction}")
             input_text = previous_text
             context = {"current_upstream": source_text, "upstream_diff": upstream_diff,
-                       "transition_decision": transition}
+                       "transition_decision": transition, **answer_context}
         else:
-            instructions = f"根据正式上游文档生成{label}候选，只写入 {draft}；该文件不存在，必须使用 overwrite=false。{extra}"
+            instructions = (f"根据正式上游文档生成{label}候选，只写入 {draft}；该文件不存在，必须使用 overwrite=false。"
+                            f"{extra}{answer_instruction}")
             input_text = source_text
-            context = {}
+            context = answer_context
         model_tool_loop(db, task, run,
                         instructions, input_text, context, tools,
                         stop_when=lambda: (root / draft).is_file(),
@@ -1130,7 +1341,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
                         f"你是独立 reviewer。评审候选，区分阻塞问题、普通问题和建议，只写入 {review}；"
                         "检查差异是否完整覆盖、preserved_sections 是否被意外修改、旧约束是否丢失以及是否引入无依据设计；write 必须使用 overwrite=false。",
                         draft_text, {"upstream": source_text, "previous_artifact": previous_text,
-                                     "upstream_diff": upstream_diff, "transition_decision": transition}, tools,
+                                     "upstream_diff": upstream_diff, "transition_decision": transition,
+                                     **answer_context}, tools,
                         stop_when=lambda: (root / review).is_file(),
                         tool_schemas=[schema for schema in TOOL_SCHEMAS if schema["function"]["name"] == "write"],
                         history_key=f"{kind}_review")
@@ -1140,10 +1352,11 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     if not (root / formal_version).is_file():
         # 把评审意见并入正式版本，再同步当前有效文档。
         model_tool_loop(db, task, run,
-                        f"根据候选与独立评审生成正式{label}，只写入 {formal_version}，不得改变上游需求；write 必须使用 overwrite=false。",
+                        f"根据候选与独立评审生成正式{label}，只写入 {formal_version}，不得改变上游需求；"
+                        f"write 必须使用 overwrite=false。{answer_instruction}",
                         draft_text, {"review": review_text, "upstream": source_text,
                                      "previous_artifact": previous_text,
-                                     "transition_decision": transition}, tools,
+                                     "transition_decision": transition, **answer_context}, tools,
                         stop_when=lambda: (root / formal_version).is_file(),
                         tool_schemas=[schema for schema in TOOL_SCHEMAS if schema["function"]["name"] == "write"],
                         history_key=f"{kind}_formal")
@@ -1152,12 +1365,95 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     atomic_copy(root / formal_version, root / target)
     run.input_path = source
     run.output_path = formal_version
+    if kind == "architecture":
+        from .unit_workflow import ensure_plan
+        ensure_plan(db, task, run, tools)
     finish_step(db, task, run, NEXT_STEP[task.cur_step])
+
+
+def product_files(root: Path) -> list[Path]:
+    # 收集当前产品目录的全部实际文件，供完整快照和变更判断使用。
+    directory = (root / "product").resolve()
+    files = sorted(path for path in directory.rglob("*") if path.is_file())
+    for path in files:
+        # 不把产品目录之外的符号链接目标当作产品文件读取。
+        if directory not in path.resolve().parents:
+            raise RuntimeError("product_file_outside_directory")
+    return files
+
+
+def is_product_test(path: Path) -> bool:
+    # 按产品约定识别 Node 自动发现的测试文件，不绑定产品名称。
+    return path.name.endswith((".test.js", ".test.cjs", ".test.mjs"))
+
+
+class ProductEntryParser(HTMLParser):
+    def __init__(self):
+        # 收集 HTML 中需要加载的脚本和样式引用。
+        super().__init__()
+        self.references: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        # 只检查实际加载的 script src 与 stylesheet href，不把普通链接当入口。
+        attributes = dict(attrs)
+        reference = attributes.get("src") if tag == "script" else None
+        if tag == "link" and "stylesheet" in (attributes.get("rel") or "").lower().split():
+            reference = attributes.get("href")
+        if reference is not None:
+            self.references.append(reference)
+
+
+def missing_product_files(root: Path) -> list[str]:
+    # 校验固定入口、自动发现测试及 HTML 的本地引用，返回真实缺失路径。
+    directory = (root / "product").resolve()
+    required = ["index.html", "verify_product.py", "implementation.md"]
+    files = product_files(root)
+    missing = [name for name in required if not (directory / name).is_file()]
+    # 排除 Node 自动发现会跳过的 node_modules 目录。
+    if not any(is_product_test(path) and "node_modules" not in path.relative_to(directory).parts for path in files):
+        missing.append("*.test.js|*.test.cjs|*.test.mjs")
+    entry = directory / "index.html"
+    if entry.is_file():
+        parser = ProductEntryParser()
+        parser.feed(entry.read_text(encoding="utf-8"))
+        for reference in parser.references:
+            url = urlsplit(reference)
+            if url.scheme or url.netloc:
+                continue
+            # 站点绝对路径也相对于产品目录，查询参数与片段不属于文件名。
+            relative = unquote(url.path).lstrip("/")
+            target = (directory / relative).resolve()
+            if directory not in target.parents:
+                raise RuntimeError("product_entry_outside_directory")
+            if not target.is_file():
+                missing.append(relative)
+    return list(dict.fromkeys(missing))
+
+
+def check_product_entry(db: Session, task: Task, run: StepRun) -> bool:
+    # 在验证前重新检查产品入口，避免零测试或缺失资源被视为验证通过。
+    missing = missing_product_files(workspace_for(task))
+    if not missing:
+        return True
+    reason = f"implementation_files_missing:{','.join(missing)}"
+    report_name = "test-report.md" if run.step == Step.test else "verification-report.md"
+    report = workspace_for(task) / "evidence" / report_name
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(f"# 入口校验失败\n\n{reason}\n", encoding="utf-8")
+    run.output_path = f"evidence/{report_name}"
+    # 保存失败证据并进入现有返修规则，不让 Node 空发现掩盖缺失测试。
+    fail_or_repair(db, task, run, reason)
+    return False
 
 
 def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     # 根据当前设计开发或返修生成软件并核对实现血缘。
     root = workspace_for(task)
+    if (root / "docs/development-plan.json").is_file():
+        # 新计划串行执行模块／功能测试闭环，旧任务保留原开发入口。
+        from .unit_workflow import handle_develop as handle_unit_develop
+        handle_unit_develop(db, task, run, tools)
+        return
     product = (root / "docs" / "product.md").read_text(encoding="utf-8")
     architecture_path = root / "docs/architecture.md"
     architecture = architecture_path.read_text(encoding="utf-8") if architecture_path.is_file() else ""
@@ -1169,14 +1465,12 @@ def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     dev_design = (design_path.read_text(encoding="utf-8") if design_path.is_file() else
                   "正式产品需求见 input；现有架构见 existing_architecture。"
                   f"\n\n项目固定实现约束：\n" + "\n".join(FIXED_PRODUCT_CONSTRAINTS))
-    existing = [str(path.relative_to(root)) for path in (root / "product").rglob("*") if path.is_file()]
-    required = ["index.html", "styles.css", "app.js", "calculator.test.js", "verify_product.py", "implementation.md"]
+    existing = [str(path.relative_to(root)) for path in product_files(root)]
     is_repair = task.repair_round > 0
-    required_paths = [root / "product" / name for name in required]
     lineage_path = root / "evidence" / "implementation-lineage.json"
     lineage = json.loads(lineage_path.read_text(encoding="utf-8")) if lineage_path.is_file() else {}
     dev_design_hash = content_hash(dev_design)
-    upstream_changed = (all(path.is_file() for path in required_paths)
+    upstream_changed = (not missing_product_files(root)
                         and lineage.get("dev_design_hash") != dev_design_hash)
     # 文件齐全也要核对设计血缘；上游设计变化时仍必须增量修改。
     triage = active_bug_triage(task)
@@ -1185,36 +1479,37 @@ def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
         "requirement_change", "architecture_defect", "dev_design_defect"
     }
     is_revision = is_repair or upstream_changed or non_bug_change
-    if not is_revision and all(path.is_file() for path in required_paths):
+    if not is_revision and not missing_product_files(root) and lineage.get("dev_design_hash") == dev_design_hash:
         run.output_path = "product/implementation.md"
         finish_step(db, task, run, Step.test)
         return
-    instructions = """实现固定的原生 HTML、CSS、JavaScript 单模块软件。先在 text 中给出简短计划，再用 write 创建或覆盖文件。
-write/read 的路径相对任务工作区，不是 product 工作目录。必须生成以下精确路径：product/index.html、product/styles.css、product/app.js、product/calculator.test.js、product/verify_product.py、product/implementation.md。
+    instructions = """实现原生 HTML、CSS、JavaScript 软件，服从正式设计的模块边界。先在 text 中给出简短计划，再用 write 创建或覆盖文件。
+write/read 的路径相对任务工作区，不是 product 工作目录。固定入口为 product/index.html、product/verify_product.py、product/implementation.md；JS、CSS 和其他文件路径按正式设计生成，HTML 本地引用必须指向实际产品文件。不要求根目录 app.js 或 styles.css。
 不存在的文件必须使用 overwrite=false；只有 existing_product_files 明确列出的已有文件才使用 overwrite=true。不要把文件写到工作区根目录。
-优先确保六个必需文件全部存在，再使用 exec 调试；不要在必需文件未齐时反复运行测试或临时诊断命令。正式测试和失败返修由后续 test Step 负责。
-calculator.test.js 使用 Node 内置测试框架；verify_product.py 使用 Python Playwright 验证已批准需求中的核心行为、异常输入和错误后恢复。
+优先完成设计规定的全部实现文件、三个固定入口及测试文件，再使用 exec 调试；不要在文件未齐时反复运行测试或临时诊断命令。正式测试和失败返修由后续 test Step 负责。
+Node 内置测试文件命名为 *.test.js、*.test.cjs 或 *.test.mjs，可放在子目录；verify_product.py 使用 Python Playwright 验证已批准需求中的核心行为、异常输入和错误后恢复。
 verify_product.py 必须读取命令行第一个参数作为访问地址，直接连接系统已启动的产品服务；不得自行启动 HTTP 服务或绑定固定端口。
-可使用 exec 执行 node --test calculator.test.js。不得引入生成产品依赖。"""
+可使用 exec 执行 node --test 自动发现测试。不得引入生成产品依赖。全部设计文件完成后立即结束，不得仅因入口文件存在就宣称完成。"""
     if not design_path.is_file():
         instructions += "\n此任务经 Planner 确认无需独立 Dev Design；按 context 的正式产品需求和固定约束实施，不补写虚假的设计文档，也不擅自增加产品行为。"
     if is_repair:
         instructions += """
-这是失败后的返修，不是首次生成。正式实现依据、失败来源、对应的完整失败报告和全部当前产品文件内容已经完整放在 context 中；不要读取文件，直接逐项判断失败来自实现、测试还是两者。测试期望与已批准需求冲突时修测试，实现偏离时修实现。
+这是失败后的返修，不是首次生成。正式实现依据、失败来源、对应的完整失败报告和当前产品文件已放在 context 或最近工具交互中；优先使用已有内容，需要原始历史证据时用查询工具，需要最新文件时可用 read。逐项判断失败来自实现、测试还是两者。测试期望与已批准需求冲突时修测试，实现偏离时修实现。
 必须优先解决 failure_source_step 指向的失败：若为 verify_product，重点检查 Playwright 输出、verify_product.py 是否使用系统传入的 HTTP URL，以及浏览器脚本是否真实加载；不得只运行 Node 测试后宣称完成。
-至少使用 overwrite=true 实际修改一个 existing_product_files 中的文件。可以用 exec 运行 Node 测试，但不要查找、安装或尝试切换 Python／Playwright 环境；系统会在你结束本轮后使用受控 Python 自动复跑原失败验证。完成必要写入和 Node 测试后立即结束，不得因为六个文件已经存在就宣称完成。"""
+至少使用 overwrite=true 实际修改一个 existing_product_files 中的文件。可以用 exec 运行 Node 测试，但不要查找、安装或尝试切换 Python／Playwright 环境；系统会在你结束本轮后使用受控 Python 自动复跑原失败验证。完成必要写入和 Node 测试后立即结束，不得因为入口文件已经存在就宣称完成。"""
     elif upstream_changed or non_bug_change:
         instructions += """
 这是已验收产品的增量开发。必须比较变更后的正式产品需求、previous_product 与当前代码；若 Dev Design 变化，再比较 previous_dev_design 与当前 dev_design。以现有代码为基线，只修改受差异影响的代码和测试，不得推倒重写无关部分。
-至少使用 overwrite=true 修改一个 existing_product_files 中的文件，并用 exec 运行更新后的相关测试。不得因为六个文件已经存在就宣称完成。"""
+至少使用 overwrite=true 修改一个 existing_product_files 中的文件，并用 exec 运行更新后的相关测试。不得因为入口文件已经存在就宣称完成。"""
         safe_record_trace(db, task, run, "transition_decision", "succeeded", "开发影响判断",
                           "revise", {"previous_lineage": lineage,
                                      "current_dev_design_hash": dev_design_hash},
                           {"action": "revise", "reason": "implementation_lineage_mismatch"})
-    stop_when = None if is_revision else lambda: all(path.is_file() for path in required_paths)
+    # 等模型完成所有设计文件后再校验，避免入口齐全时截断模块生成。
+    stop_when = None
     current_product_files = {
         str(path.relative_to(root)): path.read_text(encoding="utf-8", errors="replace")
-        for path in required_paths if path.is_file()
+        for path in product_files(root)
     } if is_revision else {}
     versioned_designs = sorted((root / "docs").glob("dev-design-v*.md"))
     previous_dev_design = versioned_designs[-2].read_text(encoding="utf-8") if len(versioned_designs) >= 2 else ""
@@ -1226,7 +1521,7 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
     triage_files = sorted((root / "evidence").glob("acceptance-triage-*.json"))
     acceptance_triage = json.loads(triage_files[-1].read_text(encoding="utf-8")) if triage_files else {}
     repair_tools = [schema for schema in TOOL_SCHEMAS
-                    if schema["function"]["name"] in {"write", "exec"}] if is_revision else None
+                    if schema["function"]["name"] in {"write", "exec", "read"}] if is_revision else None
     previous_failed = db.scalar(select(StepRun).where(
         StepRun.task_id == task.id, StepRun.id < run.id, StepRun.status == StepStatus.failed
     ).order_by(StepRun.id.desc()).limit(1)) if is_repair else None
@@ -1261,8 +1556,9 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
                                "file_snapshot": "unknown", "sha256": content_hash(latest_failure_report)}
     max_attempts = MAX_NO_CHANGE_CORRECTIONS + 1 if is_revision else 1
     for repair_attempt in range(1, max_attempts + 1):
-        attempt_before = {path: path.read_bytes() for path in required_paths if path.is_file()}
+        attempt_before = {path: path.read_bytes() for path in product_files(root)}
         base_context = {**base_context,
+                        "existing_product_files": [str(path.relative_to(root)) for path in attempt_before],
                         "snapshot": {"step_run_id": run.id, "repair_attempt": repair_attempt,
                                      "scope": "attempt_start",
                                      "file_sha256": {str(path.relative_to(root)): hashlib.sha256(content).hexdigest()
@@ -1277,23 +1573,22 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
         model_tool_loop(db, task, run, instructions, product,
                         {**base_context, "repair_feedback": repair_feedback}, tools,
                         stop_when=stop_when, tool_schemas=repair_tools)
-        missing = [name for name, path in zip(required, required_paths) if not path.is_file()]
+        missing = missing_product_files(root)
         if missing:
             raise RuntimeError(f"implementation_files_missing:{','.join(missing)}")
-        changed = not is_revision or any(attempt_before.get(path) != path.read_bytes() for path in required_paths)
+        current_paths = product_files(root)
+        changed_paths = {path for path in current_paths if attempt_before.get(path) != path.read_bytes()}
+        changed = not is_revision or bool(changed_paths)
         if non_bug_change and not is_repair:
-            code_changed = any(attempt_before.get(root / "product" / name) !=
-                               (root / "product" / name).read_bytes()
-                               for name in ("index.html", "styles.css", "app.js"))
-            test_changed = any(attempt_before.get(root / "product" / name) !=
-                               (root / "product" / name).read_bytes()
-                               for name in ("calculator.test.js", "verify_product.py"))
+            code_changed = any(path.suffix in {".html", ".css", ".js", ".cjs", ".mjs"}
+                               and not is_product_test(path) for path in changed_paths)
+            test_changed = any(is_product_test(path) or path.name == "verify_product.py" for path in changed_paths)
             changed = code_changed and test_changed if feature_change else code_changed or test_changed
         if changed and is_repair and failure_source in {Step.test.value, Step.verify_product.value}:
             if failure_source == Step.verify_product.value and task.result_url:
                 command = f"{shlex.quote(sys.executable)} verify_product.py {shlex.quote(task.result_url)}"
             else:
-                command = "node --test calculator.test.js"
+                command = "node --test"
             validation = execute_tool(db, task, run, tools, ToolCall(
                 str(uuid.uuid4()), "exec", {"action": "run", "command": command}))
             validation_passed = (validation.status == "succeeded"
@@ -1306,7 +1601,7 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
             failure_evidence_source = {"step_run_id": run.id, "repair_attempt": repair_attempt,
                                        "source": "controlled_validation", "sha256": content_hash(latest_failure_report),
                                        "file_snapshot": {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
-                                                         for path in required_paths}}
+                                                         for path in product_files(root)}}
             repair_feedback = {
                 "attempt": repair_attempt,
                 "message": "文件虽有变化，但最初失败的验证仍未通过。请根据本次真实输出继续修复，不得只运行其他测试。",
@@ -1324,10 +1619,10 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
         if changed:
             break
         hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
-                  for path in required_paths}
+                  for path in product_files(root)}
         repair_feedback = {**(repair_feedback or {}),
             "attempt": repair_attempt,
-            "message": "你已结束本轮返修，但六个必需文件均未产生实际内容变化。模型文本中的已修改声明不算修改。请根据失败报告重新诊断，并通过 write 实际修改相关文件。",
+            "message": "你已结束本轮返修，但实际产品文件均未产生内容变化。模型文本中的已修改声明不算修改。请根据失败报告重新诊断，并通过 write 实际修改相关文件。",
             "failure_source_step": failure_source,
             "latest_failure_report": latest_failure_report,
             "unchanged_file_sha256": hashes,
@@ -1352,8 +1647,10 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
 
 def handle_test(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     # 运行生成软件测试并据结果推进或返修。
+    if not check_product_entry(db, task, run):
+        return
     result = execute_tool(db, task, run, tools, ToolCall(call_id=str(uuid.uuid4()), tool_name="exec",
-                                   parameters={"action": "run", "command": "node --test calculator.test.js"}))
+                                   parameters={"action": "run", "command": "node --test"}))
     report = workspace_for(task) / "evidence" / "test-report.md"
     report.write_text("# 测试报告\n\n```text\n" + json.dumps(result.__dict__, ensure_ascii=False, indent=2) + "\n```\n",
                       encoding="utf-8")
@@ -1362,7 +1659,7 @@ def handle_test(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
               and "[SKIP]" not in result.output.get("stdout", ""))
     if passed:
         safe_record_trace(db, task, run, "validation", "succeeded", "单元测试通过",
-                          "node --test calculator.test.js 返回 0", result.__dict__)
+                          "node --test 返回 0", result.__dict__)
         if active_bug_triage(task):
             # 为 Bug 闭环绑定本次通过测试的代码版本，防止改动后直接启动。
             write_json_atomic(workspace_for(task) / "evidence" / "bug-tested-code-hashes.json",
@@ -1416,8 +1713,10 @@ def handle_start(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
 
 def handle_verify(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     # 在真实浏览器中验证生成软件并保存结果。
+    if not check_product_entry(db, task, run):
+        return
     unit = execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec",
-                                 {"action": "run", "command": "node --test calculator.test.js"}))
+                                 {"action": "run", "command": "node --test"}))
     python = shlex.quote(sys.executable)
     browser = execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec",
                                     {"action": "run", "command": f"{python} verify_product.py {task.result_url}"}))
@@ -1781,6 +2080,12 @@ def consume_event(db: Session, event: Event, task: Task):
                 # 将人工反馈路由到最早失效阶段。
                 plan_acceptance_feedback(db, task, event, combined)
             else:
+                # 单元设计问答恢复同一阶段预算，不能因一次回答重新获得整份调用上限。
+                latest = db.scalar(select(StepRun).where(StepRun.task_id == task.id,
+                    StepRun.step == task.cur_step, StepRun.status == StepStatus.waiting_user)
+                    .order_by(StepRun.id.desc()).limit(1))
+                if latest:
+                    latest.status = StepStatus.running
                 task.status = TaskStatus.running
     else:
         reject_event(event, "unknown_event_type")
@@ -1827,7 +2132,8 @@ def process_task(db: Session) -> bool:
             # 缺失的设计文档先由 Planner 判断必要性；已有正式版本仍走返工影响判断。
             design_target = ("architecture.md" if task.cur_step == Step.architecture_docs
                              else "dev-design.md")
-            if not (workspace_for(task) / "docs" / design_target).is_file():
+            if (not (workspace_for(task) / "docs" / design_target).is_file()
+                    and not (task.cur_step == Step.dev_design and (workspace_for(task) / "docs/development-plan.json").is_file())):
                 action = plan_initial_design_action(db, task, run, tools)
                 if action in {"clarify", "modify_code"}:
                     return True

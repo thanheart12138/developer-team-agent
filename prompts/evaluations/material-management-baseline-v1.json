@@ -1,0 +1,49 @@
+{
+  "evaluation_id": "material-management-baseline-v1",
+  "scenario": "content-workbench-full-flow",
+  "date": "2026-09-19",
+  "prompt_versions": {
+    "unit-planner": "v1",
+    "design-author": "v1",
+    "design-reviewer": "v1",
+    "integration-repair-diagnoser": "v1",
+    "unit-developer": "v1"
+  },
+  "source_run": {
+    "evidence": "docs/evidence/content-workbench-baseline.md",
+    "workspace": "/private/tmp/content-workbench-fixed-fullflow-20260919",
+    "prompt_identity_backfilled": true
+  },
+  "result": {
+    "status": "failed",
+    "terminal_step": "develop",
+    "http_requests": 225,
+    "input_tokens": 9348854,
+    "output_tokens": 990078,
+    "total_tokens": 10338932,
+    "stage_tokens": {
+      "product_docs": 19420,
+      "architecture_docs": 65686,
+      "dev_design": 7748016,
+      "develop": 2505810
+    },
+    "planned_units": 11,
+    "passed_units": 4,
+    "entered_full_test": false,
+    "entered_browser_verification": false
+  },
+  "comparison_rules": {
+    "primary": [
+      "final_status",
+      "terminal_step",
+      "passed_units"
+    ],
+    "secondary": [
+      "total_tokens",
+      "http_requests",
+      "stage_tokens.dev_design",
+      "stage_tokens.develop"
+    ],
+    "guardrail": "只有在完成度不下降时，Token 和 HTTP 降低才记为改进；完整成功优先于成本下降。"
+  }
+}
