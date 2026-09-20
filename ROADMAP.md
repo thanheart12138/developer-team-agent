@@ -2,6 +2,8 @@
 
 ## 当前阶段
 
+2026-09-20：按用户要求提交并推送 `7c4d0a9` 至 `origin/codex/slice-control-switch`，完整项目 241 项测试通过。随后恢复原 DeepSeek 失败尝试，保留 HTTP 16／60、Develop 24／100 和受限实现 3／4，不导入局部样本代码。新增一次／30,731 Token，两次 replace 无截断，但只修语法、仍引用不存在的 helper，独立 Node 40 pass、1 fail、9 todo；第四次额度实际耗尽，最终 slice_restricted_call_budget_exceeded。续跑累计 17 HTTP／333,226 Token，完整产品仍未交付，未追加调用或重置预算。详细证据见 `docs/evidence/content-workbench-continuation-validation.md`。
+
 2026-09-20：按用户要求补齐架构问题 006 中整文件输出截断的问题证据、已有 replace 的核查、强化提示并保留 write 的决策与取舍，以及 v2 局部回放结果。明确区分已采用的提示词调整、未采用的 replace-only 和尚待确认的截断恢复策略；保留 UI 九项 todo、原任务失败及非等工作量成本对比限制。同步问题索引，文档差异检查通过，本次未新增模型调用或修改运行实现。
 
 2026-09-20：按用户要求完成 slice-implementer/v2 的真实局部回放，仅替换上次截断请求的提示词，其余请求参数保持一致。一次 DeepSeek 请求，输入 30,327／输出 860／合计 31,187 Token；返回两次 replace，修复看板测试，无 write、无截断。独立 Node 45 pass、0 fail、9 UI todo，原测试断言保留。局部修复通过，整张切片未完成；本次未补 UI，不能把输出减少全部解释为同等工作量的效率提升。未续跑原任务、未重置预算。证据见 `docs/evidence/content-workbench-continuation-validation.md`。

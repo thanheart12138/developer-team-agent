@@ -67,3 +67,15 @@
 - 单样本支持“新提示在这次修复中促使局部替换并避免截断”，不证明稳定性。输出减少也伴随完成范围缩小：本次没有尝试补齐 UI 测试，不能将 860 对比 8,192 解读为同等交付量的纯效率提升。
 
 原请求、响应、动作结果、文件变化和独立日志保存在该目录的 `request.json`、`response.json`、`summary.json`、`node.log`。没有人工修改生成产品，没有追加第二次付费调用。
+
+## 用户要求推送后恢复原全流程
+
+2026-09-20，用户要求推送代码并继续先前中断的 DeepSeek 全量测试。完整项目回归 241 项通过；代码提交 `7c4d0a9` 推送至 `thanheart12138/developer-team-agent` 的 `codex/slice-control-switch` 分支，main 未改变。首次推送被自动审批要求明确目的地和完整载荷，用户明确确认后推送成功。
+
+在原隔离续跑目录保存 `before-user-resume-v2/`（SQLite 备份、失败状态、用量和原摘要）及 `resume-v2-manifest.json`，核对生成文件哈希未变化。仅按用户显式续跑要求开放原失败尝试的剩余额度：HTTP 16／60、Develop 24／100、受限实现 3／4 原样保留，将任务／Step 恢复 running、该受限状态恢复 ready。不修改正式数据库、Runtime 恢复策略或生成产品；局部回放修复没有导入。
+
+正式 Worker 新增一次请求，输入 30,321／输出 410／合计 30,731 tokens，finish_reason=tool_calls。两次 replace 只修改看板测试：移除函数内非法 await 并合并 import，却继续引用不存在的 `tests/helpers/dashboard-import.js`，未生成真实依赖接线。Runtime 自测及停止后独立 Node 均为 40 pass、1 fail、9 todo；错误变为 `ERR_MODULE_NOT_FOUND`。UI 九项 todo 未补齐。
+
+此时实际用完第四次实现，最终 `failed / develop / slice_restricted_call_budget_exceeded`，本次是真正的四次额度耗尽，与上轮截断后通用错误不同。续跑累计 17 次 HTTP、333,226 tokens（不含独立 v2 局部回放的一次／31,187 tokens）；未到正式全量测试、启动及浏览器阶段。新 Trace 从 176 开始，独立日志 `independent-resume-v2-node.log`，最新 `summary.json` 保存累计状态。没有重置计数、额外第五次调用或人工补写。
+
+本次再次支持 replace 提示可以改变工具选择并缩短输出，但也表明局部一次修复成功不等于稳定修复：相近输入下仍可能只修表层语法、遗漏真实依赖。完成整张切片所需的后续尝试或预算策略待用户决定，不能把剩余总 HTTP 额度自动变成新的切片额度。
