@@ -27,8 +27,13 @@
 
 ## 评审与证据
 
+- `docs/evidence/content-workbench-continuation-validation.md`：从 materials 成功产物续跑，记录外发授权、任务／选题通过，以及看板／页面响应截断导致的控制流失败和真实用量。
+
+- `docs/evidence/materials-control-switch-validation.md`：首次推进违约后的独立受限实现、241 项机制回归、一个真实 materials 局部闭环成功样本，以及完整页面保存仍未通过的边界。
+
 - `docs/evidence/unit-workflow-validation.md`：模块／功能独立设计、程序逐单元测试修复与恢复机制，137 项回归、三十次真实 DeepSeek 部分验证及完整流程未通过的限制。
 - `docs/evidence/slice-workflow-validation.md`：逐业务切片规划、真实测试后再规划、内部重规划边界及旧任务兼容的机制验证。
+- `docs/evidence/architecture-scaffold-validation.md`：架构代码骨架、逐模块 todo 门禁及旧任务兼容验证。
 - `docs/evidence/unit-workflow-300-validation.md`：累计预算提高到 300 次后的续测，实际 40 次；固定设计开发链路通过，自主流程仍因开发计划单元重叠失败。
 - `docs/evidence/current-only-context-validation.md`：去掉自动工具历史及摘要的真实对照、读取全文去重复测与用量；重复读取、完整自主流程未通过及正式策略未切换。
 - `docs/evidence/effective-tool-state-validation.md`：复用账本聚合有效文件状态、142 项回归及真实探针；26 次模型调用，生成验证脚本错误与返修责任澄清、完整交付未通过。
@@ -42,6 +47,8 @@
 - `docs/evidence/product-entry-fix-validation.md`：通用入口、子目录模块及测试自动发现修复，计算器和多模块已有产物的真实回归，正式 Worker 加载证据。
 
 - `docs/evidence/content-workbench-baseline.md`：多模块全 DeepSeek 基准的原自动失败、独立产物验收、200 次总预算、实际用量与限制。
+- `docs/evidence/content-workbench-transactional-repair-validation.md`：事务式返修实施后的素材管理真实 DeepSeek 重跑、阶段 Token、第二张业务切片无进展失败及机制未触发边界。
+- `docs/evidence/content-workbench-resolved-issues.md`：素材管理流程中已经解决的问题及完整解决过程，记录失败证据、原因、修复、验证和边界，并明确排除仍未解决的普通开发读取循环。
 
 - 后续确需保存且已获授权的 AI 评审放在 `docs/reviews/`，按评审对象和版本命名，明确标注「AI 评审」、日期与目标版本，区分阻塞问题、普通建议及未来问题。当前不创建该目录。
 - 验证证据放在 `docs/evidence/`，按验证事项命名，记录输入、运行步骤、期望结果、实际结果、测试或日志位置和已知限制，并区分机制验证、真实 AI／工具验证与生成软件验证。

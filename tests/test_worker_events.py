@@ -12,6 +12,7 @@ from backend.app.database import Base, SessionLocal, engine
 from backend.app.models import (Event, EventStatus, Message, Step, StepRun, StepStatus, Task, TaskStatus,
                                 TraceRecord)
 from backend.app.runtime.contracts import ModelResult, ToolCall, ToolResult
+from backend.app.runtime import worker
 from backend.app.runtime.model import ModelProtocolError
 from backend.app.runtime.prompt_registry import load_prompt
 from backend.app.runtime.tools import ToolRuntime
@@ -768,6 +769,7 @@ def test_requirement_change_without_behavior_contract_waits_for_user(tmp_path, m
 def test_reviewed_document_receives_answers_after_product_approval(tmp_path, monkeypatch):
     # 设计门径和作者共享审批后的决定，不能继续使用产品文档中的旧待确认表述。
     monkeypatch.setattr("backend.app.runtime.unit_workflow.ensure_plan", lambda *args: None)
+    monkeypatch.setattr("backend.app.runtime.scaffold_workflow.ensure_scaffold", lambda *args: None)
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "product.md").write_text("优先级待确认。", encoding="utf-8")
@@ -970,6 +972,69 @@ def test_model_loop_allows_the_one_hundredth_logical_call(tmp_path, monkeypatch)
         assert run.model_call_count == 100
 
 
+def test_model_loop_honors_smaller_local_call_budget(tmp_path, monkeypatch):
+    # 返修等局部循环不能继续消耗整个 Step 的 100 次额度。
+    calls = 0
+    (tmp_path / "product").mkdir()
+    (tmp_path / "product/app.js").write_text("export const value = 1;\n", encoding="utf-8")
+
+    def fake_call(runtime, task_id, request):
+        nonlocal calls
+        calls += 1
+        return ModelResult(request.request_id, calls, "", [ToolCall(
+            f"read-{calls}", "read", {"path": "product/app.js", "description": f"read {calls}"}
+        )], "tool_calls")
+
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name="local budget", cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1,
+                      model_call_count=10,
+                      checkpoint_path=str(tmp_path / "evidence/checkpoint.json"))
+        db.add(run); db.commit()
+
+        with pytest.raises(RuntimeError, match="model_loop_call_budget_exceeded"):
+            model_tool_loop(db, task, run, "inspect", "input", {}, ToolRuntime(tmp_path), max_calls=3)
+        assert calls == 3
+        assert run.model_call_count == 13
+
+
+def test_repair_model_request_uses_manifest_without_source_snapshot_or_raw_history(tmp_path, monkeypatch):
+    # 返修请求只携带文件路径和哈希；源码按需读取，原始历史详情工具不可用。
+    captured = {}
+    (tmp_path / "product").mkdir()
+    (tmp_path / "product/app.js").write_text("export const value = 1;\n", encoding="utf-8")
+
+    def fake_call(runtime, task_id, request):
+        captured["context"] = request.context
+        captured["tools"] = {schema["function"]["name"] for schema in request.tools}
+        return ModelResult(request.request_id, 1, "done", [], "stop")
+
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name="repair context", cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1)
+        db.add(run); db.commit()
+
+        model_tool_loop(db, task, run, "repair", "failure", {
+            "provide_file_contents": False,
+            "allow_history_detail": False,
+        }, ToolRuntime(tmp_path), tool_schemas=[schema for schema in worker.TOOL_SCHEMAS
+                                                if schema["function"]["name"] == "read"])
+
+    assert "current_product_files" not in captured["context"]
+    assert captured["context"]["product_file_manifest"] == [{
+        "path": "product/app.js",
+        "sha256": hashlib.sha256(b"export const value = 1;\n").hexdigest(),
+    }]
+    assert "get_tool_execution_detail" not in captured["tools"]
+    assert {"read", "get_file_change_history", "get_model_call_summaries"} <= captured["tools"]
+
+
 def test_model_loop_blocks_third_identical_tool_action(tmp_path, monkeypatch):
     calls = 0
 
@@ -1000,6 +1065,310 @@ def test_model_loop_blocks_third_identical_tool_action(tmp_path, monkeypatch):
             TraceRecord.task_id == task.id, TraceRecord.type == "tool_guard")).all())
         assert len(guards) == 1
         assert guards[0].summary == "repeated_tool_action"
+
+
+def test_model_loop_blocks_overlapping_read_after_failed_self_test(tmp_path, monkeypatch):
+    # 改变行号和描述也不能重复读取自测失败后已经覆盖的区域。
+    calls = 0
+    product = tmp_path / "product"
+    product.mkdir()
+    (product / "a.js").write_text("export const a = 1;\n", encoding="utf-8")
+    (product / "a.test.js").write_text("\n" * 260, encoding="utf-8")
+
+    def fake_call(runtime, task_id, request):
+        nonlocal calls
+        calls += 1
+        actions = {
+            1: ToolCall("test", "run_unit_tests", {"description": "run"}),
+            2: ToolCall("read-1", "read", {"path": "product/a.test.js", "start_line": 220,
+                                                    "end_line": 245, "description": "diagnose"}),
+            3: ToolCall("read-2", "read", {"path": "product/a.test.js", "start_line": 223,
+                                                    "end_line": 232, "description": "confirm"}),
+        }
+        if calls in actions:
+            return ModelResult(request.request_id, calls, "", [actions[calls]], "tool_calls")
+        return ModelResult(request.request_id, calls, "BLOCKED: fixture", [], "stop")
+
+    class FakeUnitTools:
+        self_test = None
+
+        def restore_self_test(self, output):
+            return False
+
+        def restore_submission(self, output):
+            return False
+
+        def execute(self, call):
+            if call.tool_name == "run_unit_tests":
+                self.self_test = {"passed": False}
+                return ToolResult(call.call_id, call.tool_name, "succeeded", {"passed": False})
+            return ToolResult(call.call_id, call.tool_name, "succeeded", {"content": "failure"})
+
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name="failed read guard", cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1,
+                      checkpoint_path=str(tmp_path / "evidence/checkpoint.json"))
+        db.add(run); db.commit()
+        context = {"require_unit_submission": True,
+                   "owned_files": ["product/a.js", "product/a.test.js"]}
+
+        assert model_tool_loop(db, task, run, "work", "input", context, FakeUnitTools()) == "BLOCKED: fixture"
+        guard = db.scalar(select(TraceRecord).where(
+            TraceRecord.task_id == task.id, TraceRecord.type == "tool_guard"))
+        assert guard is not None
+        assert guard.summary == "self_test_repeated_read_requires_change"
+
+
+def test_unchanged_read_coverage_blocks_only_fully_known_ranges():
+    # 已覆盖区间的子集应被拒绝，尚未读取的尾部仍允许继续获取。
+    entries = [{
+        "history_key": "unit", "action": {"tool_name": "read", "parameters": {
+            "path": "product/a.js", "start_line": 1, "end_line": 200}},
+        "result": {"status": "succeeded", "output": {
+            "start_line": 1, "end_line": 200, "total_lines": 207}},
+    }]
+
+    assert worker._unchanged_read_is_covered(entries, "unit", ToolCall(
+        "repeat", "read", {"path": "product/a.js", "start_line": 20, "end_line": 80})) is True
+    assert worker._unchanged_read_is_covered(entries, "unit", ToolCall(
+        "tail", "read", {"path": "product/a.js", "start_line": 195, "end_line": 207})) is False
+    assert worker._unchanged_read_is_covered(entries, "unit", ToolCall(
+        "full", "read", {"path": "product/a.js"})) is False
+
+
+def test_unchanged_read_coverage_combines_ranges_and_resets_after_write():
+    # 连续区间可以共同覆盖请求；成功修改同一文件后旧读取证据失效。
+    read_head = {
+        "history_key": "unit", "action": {"tool_name": "read", "parameters": {"path": "product/a.js"}},
+        "result": {"status": "succeeded", "output": {
+            "start_line": 1, "end_line": 200, "total_lines": 207}},
+    }
+    read_tail = {
+        "history_key": "unit", "action": {"tool_name": "read", "parameters": {
+            "path": "product/a.js", "start_line": 200, "end_line": 207}},
+        "result": {"status": "succeeded", "output": {
+            "start_line": 200, "end_line": 207, "total_lines": 207}},
+    }
+    full_read = ToolCall("full", "read", {"path": "product/a.js"})
+
+    assert worker._unchanged_read_is_covered([read_head, read_tail], "unit", full_read) is True
+    write = {
+        "history_key": "unit", "action": {"tool_name": "replace", "parameters": {"path": "product/a.js"}},
+        "result": {"status": "succeeded", "output": {}},
+    }
+    assert worker._unchanged_read_is_covered([read_head, read_tail, write], "unit", full_read) is False
+
+
+def test_model_loop_blocks_covered_read_during_normal_unit_development(tmp_path, monkeypatch):
+    # 尚未发生测试失败时也应阻止对未修改文件的语义重复读取。
+    calls = 0
+
+    def fake_call(runtime, task_id, request):
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            return ModelResult(request.request_id, calls, "", [ToolCall(
+                f"read-{calls}", "read", {"path": "product/a.js", "description": "inspect"}
+            )], "tool_calls")
+        return ModelResult(request.request_id, calls, "BLOCKED: fixture", [], "stop")
+
+    class FakeUnitTools:
+        self_test = None
+
+        def restore_self_test(self, output):
+            return False
+
+        def restore_submission(self, output):
+            return False
+
+        def execute(self, call):
+            return ToolResult(call.call_id, call.tool_name, "succeeded", {
+                "content": "export const a = 1;\n", "total_lines": 1})
+
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name="normal read guard", cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1,
+                      checkpoint_path=str(tmp_path / "evidence/checkpoint.json"))
+        db.add(run); db.commit()
+        context = {"require_unit_submission": True, "owned_files": ["product/a.js"]}
+
+        assert model_tool_loop(db, task, run, "unit", "input", context, FakeUnitTools()) == "BLOCKED: fixture"
+        guard = db.scalar(select(TraceRecord).where(
+            TraceRecord.task_id == task.id, TraceRecord.type == "tool_guard"))
+        assert guard is not None
+        assert guard.summary == "unchanged_file_read_already_covered"
+
+
+def test_model_loop_requires_progress_after_covered_read_guard(tmp_path, monkeypatch):
+    # 重复读取被拒绝后，换读另一个文件仍被拒绝；写入成功后解除限制。
+    calls = 0
+
+    def fake_call(runtime, task_id, request):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            assert request.context["unit_progress_feedback"]["error"] == "unchanged_file_read_already_covered"
+            assert "不得继续 read" in request.context["unit_progress_feedback"]["instruction"]
+        actions = {
+            1: ToolCall("read-a", "read", {"path": "product/a.js"}),
+            2: ToolCall("repeat-a", "read", {"path": "product/a.js"}),
+            3: ToolCall("repeat-a-again", "read", {"path": "product/a.js"}),
+            4: ToolCall("write-a", "write", {
+                "path": "product/a.js", "content": "changed\n", "overwrite": True}),
+        }
+        if calls in actions:
+            return ModelResult(request.request_id, calls, "", [actions[calls]], "tool_calls")
+        return ModelResult(request.request_id, calls, "BLOCKED: fixture", [], "stop")
+
+    class FakeUnitTools:
+        self_test = None
+
+        def restore_self_test(self, output):
+            return False
+
+        def restore_submission(self, output):
+            return False
+
+        def execute(self, call):
+            if call.tool_name == "write":
+                return ToolResult(call.call_id, call.tool_name, "succeeded", {"bytes_written": 8})
+            return ToolResult(call.call_id, call.tool_name, "succeeded", {
+                "content": "value\n", "total_lines": 1})
+
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name="covered read progress", cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1,
+                      checkpoint_path=str(tmp_path / "evidence/checkpoint.json"))
+        db.add(run); db.commit()
+        context = {"require_unit_submission": True,
+                   "owned_files": ["product/a.js", "product/b.js"]}
+
+        assert model_tool_loop(db, task, run, "unit", "input", context, FakeUnitTools()) == "BLOCKED: fixture"
+        guards = list(db.scalars(select(TraceRecord).where(
+            TraceRecord.task_id == task.id, TraceRecord.type == "tool_guard")
+            .order_by(TraceRecord.id)).all())
+        assert [guard.summary for guard in guards] == [
+            "unchanged_file_read_already_covered",
+            "covered_read_requires_write_test_or_replan",
+        ]
+
+
+def test_model_loop_requires_self_test_after_normal_unit_change(tmp_path, monkeypatch):
+    # 普通开发写入后的下一批也必须自测，不能重新进入读取确认。
+    calls = 0
+
+    def fake_call(runtime, task_id, request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            action = ToolCall("write", "write", {
+                "path": "product/a.js", "content": "changed\n", "overwrite": True})
+        elif calls == 2:
+            action = ToolCall("read", "read", {"path": "product/a.js"})
+        elif calls == 3:
+            action = ToolCall("test", "run_unit_tests", {"description": "verify"})
+        else:
+            return ModelResult(request.request_id, calls, "BLOCKED: done", [], "stop")
+        return ModelResult(request.request_id, calls, "", [action], "tool_calls")
+
+    class FakeUnitTools:
+        self_test = None
+
+        def restore_self_test(self, output):
+            return False
+
+        def restore_submission(self, output):
+            return False
+
+        def execute(self, call):
+            if call.tool_name == "run_unit_tests":
+                self.self_test = {"passed": True}
+                return ToolResult(call.call_id, call.tool_name, "succeeded", {"passed": True})
+            return ToolResult(call.call_id, call.tool_name, "succeeded", {})
+
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name="normal change retest", cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1,
+                      checkpoint_path=str(tmp_path / "evidence/checkpoint.json"))
+        db.add(run); db.commit()
+
+        assert model_tool_loop(db, task, run, "unit", "input", {
+            "require_unit_submission": True, "owned_files": ["product/a.js"]
+        }, FakeUnitTools()) == "BLOCKED: done"
+        guards = list(db.scalars(select(TraceRecord).where(
+            TraceRecord.task_id == task.id, TraceRecord.type == "tool_guard")).all())
+        assert [guard.summary for guard in guards] == ["unit_change_requires_self_test"]
+
+
+def test_model_loop_requires_self_test_after_failed_unit_change(tmp_path, monkeypatch):
+    # 外部恢复的失败证据也必须在修改后的下一批阻止重新读取，强制进入复测。
+    calls = 0
+    product = tmp_path / "product"
+    product.mkdir()
+    target = product / "a.test.js"
+    target.write_text("old\n", encoding="utf-8")
+
+    def fake_call(runtime, task_id, request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            action = ToolCall("replace", "replace", {
+                "path": "product/a.test.js", "old": "old", "new": "fixed",
+                "description": "fix test"})
+        elif calls == 2:
+            action = ToolCall("read", "read", {
+                "path": "product/a.test.js", "description": "recheck"})
+        elif calls == 3:
+            action = ToolCall("test", "run_unit_tests", {"description": "verify change"})
+        else:
+            return ModelResult(request.request_id, calls, "BLOCKED: done", [], "stop")
+        return ModelResult(request.request_id, calls, "", [action], "tool_calls")
+
+    class FakeUnitTools:
+        self_test = None
+
+        def restore_self_test(self, output):
+            return False
+
+        def restore_submission(self, output):
+            return False
+
+        def execute(self, call):
+            if call.tool_name == "replace":
+                target.write_text("fixed\n", encoding="utf-8")
+                return ToolResult(call.call_id, call.tool_name, "succeeded", {})
+            if call.tool_name == "run_unit_tests":
+                self.self_test = {"passed": True}
+                return ToolResult(call.call_id, call.tool_name, "succeeded", {"passed": True})
+            return ToolResult(call.call_id, call.tool_name, "succeeded", {"content": "fixed"})
+
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name="force retest", cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1,
+                      checkpoint_path=str(tmp_path / "evidence/checkpoint.json"))
+        db.add(run); db.commit()
+        context = {"require_unit_submission": True, "owned_files": ["product/a.test.js"],
+                   "unit_test_feedback": {"passed": False}}
+
+        assert model_tool_loop(db, task, run, "work", "input", context, FakeUnitTools()) == "BLOCKED: done"
+        guards = list(db.scalars(select(TraceRecord).where(
+            TraceRecord.task_id == task.id, TraceRecord.type == "tool_guard")).all())
+        assert [guard.summary for guard in guards] == ["unit_change_requires_self_test"]
 
 
 def test_repair_loop_blocks_sixth_non_write_action(tmp_path, monkeypatch):
@@ -1561,6 +1930,51 @@ def test_browser_verification_skip_cannot_pass_acceptance(tmp_path, monkeypatch)
 
         assert task.status == TaskStatus.running
         assert run.error == "verification_failed"
+        evidence = json.loads((tmp_path / "evidence/verification-evidence.json").read_text())
+        assert evidence["file_hashes"] == product_code_hashes(task)
+        assert evidence["browser_passed"] is False
+
+
+def test_verify_repair_refreshes_stale_evidence_before_model(tmp_path, monkeypatch):
+    # 失败报告对应的验证脚本已变化时，先复跑当前脚本；通过后不得再调用模型修旧错误。
+    docs = tmp_path / "docs"
+    product = tmp_path / "product"
+    evidence = tmp_path / "evidence"
+    docs.mkdir(); product.mkdir(); evidence.mkdir()
+    (docs / "product.md").write_text("product", encoding="utf-8")
+    (docs / "dev-design.md").write_text("design", encoding="utf-8")
+    for name in ("index.html", "styles.css", "app.js", "calculator.test.js",
+                 "verify_product.py", "implementation.md"):
+        (product / name).write_text("old", encoding="utf-8")
+
+    with SessionLocal() as db:
+        task = Task(task_name="stale verification", cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path), repair_round=1,
+                    result_url="http://127.0.0.1:8000")
+        db.add(task); db.flush()
+        failed = StepRun(task_id=task.id, step=Step.verify_product,
+                         status=StepStatus.failed, attempt=1, error="verification_failed")
+        db.add(failed); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop,
+                      status=StepStatus.running, attempt=2)
+        db.add(run); db.commit()
+        worker.write_verification_evidence(task, None, ToolResult(
+            "old-browser", "exec", "succeeded",
+            {"exit_code": 1, "stdout": "old URL failure", "stderr": ""}))
+        (product / "verify_product.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+        monkeypatch.setattr(worker, "execute_tool", lambda *args, **kwargs: ToolResult(
+            "fresh-browser", "exec", "succeeded",
+            {"exit_code": 0, "stdout": "browser passed", "stderr": ""}))
+        monkeypatch.setattr(worker, "model_tool_loop", lambda *args, **kwargs: pytest.fail(
+            "stale verification must be rerun before invoking the model"))
+
+        handle_develop(db, task, run, ToolRuntime(tmp_path))
+
+        assert task.cur_step == Step.test
+        assert run.status == StepStatus.succeeded
+        refreshed = json.loads((evidence / "verification-evidence.json").read_text())
+        assert refreshed["browser_passed"] is True
+        assert refreshed["file_hashes"] == product_code_hashes(task)
 
 
 def test_repair_runs_develop_even_when_all_required_files_exist(tmp_path, monkeypatch):
@@ -1599,13 +2013,16 @@ def test_repair_runs_develop_even_when_all_required_files_exist(tmp_path, monkey
 
         assert captured["repair_round"] == 1
         assert captured["latest_failure_report"] == "three failures"
-        assert captured["current_product_files"]["product/app.js"] == "old"
+        assert "current_product_files" not in captured
+        assert captured["provide_file_contents"] is False
+        assert captured["allow_history_detail"] is False
+        assert "product/app.js" in captured["snapshot"]["file_sha256"]
         assert {schema["function"]["name"] for schema in captured["tool_schemas"]} == {"write", "exec", "read"}
         assert (product_dir / "app.js").read_text(encoding="utf-8") == "fixed"
         assert task.cur_step == Step.test
 
 
-def test_verify_repair_uses_verification_report_and_retries_no_change(tmp_path, monkeypatch):
+def test_verify_repair_uses_verification_report_and_stops_on_no_change(tmp_path, monkeypatch):
     docs = tmp_path / "docs"
     product_dir = tmp_path / "product"
     evidence = tmp_path / "evidence"
@@ -1639,14 +2056,13 @@ def test_verify_repair_uses_verification_report_and_retries_no_change(tmp_path, 
                       status=StepStatus.running, attempt=3)
         db.add(run); db.commit()
 
-        handle_develop(db, task, run, ToolRuntime(tmp_path))
+        with pytest.raises(RuntimeError, match="repair_made_no_changes"):
+            handle_develop(db, task, run, ToolRuntime(tmp_path))
 
-        assert len(contexts) == 2
+        assert len(contexts) == 1
         assert contexts[0]["failure_source_step"] == "verify_product"
         assert contexts[0]["latest_failure_report"] == "browser failed: buttons stay at 0.00"
-        assert contexts[1]["repair_feedback"]["attempt"] == 1
-        assert "unchanged_file_sha256" in contexts[1]["repair_feedback"]
-        assert task.cur_step == Step.test
+        assert task.cur_step == Step.develop
 
 
 def test_repair_preserves_latest_validation_and_refreshes_files(tmp_path, monkeypatch):
@@ -1665,8 +2081,9 @@ def test_repair_preserves_latest_validation_and_refreshes_files(tmp_path, monkey
     contexts = []
 
     def fake_loop(db, task, run, instructions, input_text, context, tools, **kwargs):
-        # 第一轮写入，后两轮只回复文字。
+        # 第一轮写入，第二轮对新验证结果不再修改。
         contexts.append(context)
+        assert kwargs["max_calls"] == 2
         if len(contexts) == 1:
             (tmp_path / "product/verify_product.py").write_text("new", encoding="utf-8")
 
@@ -1690,20 +2107,20 @@ def test_repair_preserves_latest_validation_and_refreshes_files(tmp_path, monkey
             assert str(exc) == "repair_made_no_changes:latest_validation_failed"
         else:
             raise AssertionError("unchanged corrections must stop")
-    assert len(contexts) == 3
+    assert len(contexts) == 2
     for context in contexts[1:]:
-        assert context["current_product_files"]["product/verify_product.py"] == "new"
+        assert "current_product_files" not in context
+        assert context["snapshot"]["file_sha256"]["product/verify_product.py"] == hashlib.sha256(b"new").hexdigest()
         assert "Address already in use" in context["latest_failure_report"]
-    assert "Address already in use" in contexts[2]["repair_feedback"]["latest_failure_report"]
-    assert "validation_result" in contexts[2]["repair_feedback"]
+    assert "validation_result" in contexts[1]["repair_feedback"]
     assert contexts[0]["failure_evidence_source"]["file_snapshot"] == "unknown"
     assert contexts[1]["failure_evidence_source"]["source"] == "controlled_validation"
     assert contexts[1]["failure_evidence_source"]["file_snapshot"] == contexts[1]["snapshot"]["file_sha256"]
-    assert contexts[2]["snapshot"]["repair_attempt"] == 3
-    assert contexts[2]["snapshot"]["scope"] == "attempt_start"
+    assert contexts[1]["snapshot"]["repair_attempt"] == 2
+    assert contexts[1]["snapshot"]["scope"] == "attempt_start"
 
 
-def test_repair_fails_only_after_three_no_change_attempts(tmp_path, monkeypatch):
+def test_repair_stops_after_one_no_change_transaction(tmp_path, monkeypatch):
     docs = tmp_path / "docs"
     product_dir = tmp_path / "product"
     evidence = tmp_path / "evidence"
@@ -1729,10 +2146,9 @@ def test_repair_fails_only_after_three_no_change_attempts(tmp_path, monkeypatch)
         except RuntimeError as exc:
             assert str(exc) == "repair_made_no_changes"
         else:
-            raise AssertionError("three unchanged attempts must fail")
+            raise AssertionError("unchanged transaction must fail")
 
-        assert len(calls) == 3
-        assert calls[2]["repair_feedback"]["attempt"] == 2
+        assert len(calls) == 1
 
 
 def test_upstream_design_change_runs_develop_even_when_files_exist(tmp_path, monkeypatch):

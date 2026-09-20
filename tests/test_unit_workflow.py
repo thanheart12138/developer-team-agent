@@ -776,6 +776,63 @@ def test_idle_counts_batches_and_resets_after_version_change():
     assert worker.unit_idle_calls(history,{'a':'external'})==0
 
 
+def test_failed_self_test_blocks_overlapping_read_until_file_change():
+    # 自测失败区域已读取后，改变行号或描述不能绕过修改门禁；非重叠依赖仍可读取。
+    history = [{
+        'history_key': 'slice:a:1',
+        'action': {'tool_name': 'run_unit_tests', 'parameters': {}},
+        'result': {'status': 'succeeded', 'output': {'passed': False}},
+    }, {
+        'history_key': 'slice:a:1',
+        'action': {'tool_name': 'read', 'parameters': {
+            'path': 'product/a.test.js', 'start_line': 220, 'end_line': 245,
+            'description': 'first diagnosis'}},
+        'result': {'status': 'succeeded', 'output': {'content': 'failure'}},
+    }]
+    overlapping = ToolCall('overlap', 'read', {
+        'path': 'product/a.test.js', 'start_line': 223, 'end_line': 232,
+        'description': 'different description'})
+    dependency = ToolCall('dependency', 'read', {
+        'path': 'product/a.js', 'start_line': 1, 'end_line': 40,
+        'description': 'necessary dependency'})
+
+    assert worker._repeated_failed_self_test_read(history, 'slice:a:1', overlapping) is True
+    assert worker._repeated_failed_self_test_read(history, 'slice:a:1', dependency) is False
+
+    history.append({
+        'history_key': 'slice:a:1',
+        'action': {'tool_name': 'replace', 'parameters': {'path': 'product/a.test.js'}},
+        'result': {'status': 'succeeded', 'output': {}},
+    })
+    assert worker._repeated_failed_self_test_read(history, 'slice:a:1', overlapping) is False
+
+
+def test_failed_unit_change_requires_test_on_next_model_batch():
+    # 同一批可以完成相关修改，下一批必须先复测；复测后按新结果重新决定。
+    history = [{
+        'history_key': 'slice:a:1', 'model_request_id': 'modify',
+        'action': {'tool_name': 'replace', 'parameters': {'path': 'product/a.test.js'}},
+        'result': {'status': 'succeeded', 'output': {}},
+    }]
+    read = ToolCall('read', 'read', {'path': 'product/a.test.js'})
+    test = ToolCall('test', 'run_unit_tests', {})
+
+    assert worker._failed_unit_change_requires_test(
+        history, 'slice:a:1', 'modify', read, external_failure=True) is False
+    assert worker._failed_unit_change_requires_test(
+        history, 'slice:a:1', 'next', read, external_failure=True) is True
+    assert worker._failed_unit_change_requires_test(
+        history, 'slice:a:1', 'next', test, external_failure=True) is False
+
+    history.append({
+        'history_key': 'slice:a:1', 'model_request_id': 'next',
+        'action': {'tool_name': 'run_unit_tests', 'parameters': {}},
+        'result': {'status': 'succeeded', 'output': {'passed': False}},
+    })
+    assert worker._failed_unit_change_requires_test(
+        history, 'slice:a:1', 'after-test', read, external_failure=True) is False
+
+
 def test_submission_changed_before_test_cannot_validate_unsubmitted_version(tmp_path,monkeypatch):
     # 提交与程序测试之间的外部变化不能被当成本次已提交版本。
     plan=plan_fixture(tmp_path);seed_designs(tmp_path,plan)
@@ -808,3 +865,21 @@ def test_old_developing_checkpoint_with_files_requires_new_submission(tmp_path,m
         task.cur_step=Step.develop
         worker.handle_develop(db,task,run,ToolRuntime(tmp_path))
         assert calls[0][0]=='add' and calls[0][1]['require_unit_submission']
+
+
+def test_unit_tools_preview_large_file_and_allow_line_range(tmp_path):
+    path = tmp_path / 'product/large.js'
+    path.parent.mkdir(parents=True)
+    path.write_text(''.join(f'line-{index}\n' for index in range(1, 251)), encoding='utf-8')
+    tools = units.UnitTools(tmp_path, ['product/large.js'], [])
+
+    preview = tools.execute(ToolCall('preview', 'read', {'path':'product/large.js'}))
+    selected = tools.execute(ToolCall('selected', 'read', {
+        'path':'product/large.js', 'start_line':220, 'end_line':225}))
+
+    assert preview.status == 'succeeded'
+    assert preview.output['truncated'] is True
+    assert preview.output['total_lines'] == 250
+    assert preview.output['hint'] == 'large_file_preview_use_start_line_and_end_line'
+    assert 'line-201' not in preview.output['content']
+    assert selected.output['content'] == ''.join(f'line-{index}\n' for index in range(220, 226))

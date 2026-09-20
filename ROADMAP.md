@@ -2,6 +2,50 @@
 
 ## 当前阶段
 
+2026-09-20：按用户要求补齐架构问题 006 中整文件输出截断的问题证据、已有 replace 的核查、强化提示并保留 write 的决策与取舍，以及 v2 局部回放结果。明确区分已采用的提示词调整、未采用的 replace-only 和尚待确认的截断恢复策略；保留 UI 九项 todo、原任务失败及非等工作量成本对比限制。同步问题索引，文档差异检查通过，本次未新增模型调用或修改运行实现。
+
+2026-09-20：按用户要求完成 slice-implementer/v2 的真实局部回放，仅替换上次截断请求的提示词，其余请求参数保持一致。一次 DeepSeek 请求，输入 30,327／输出 860／合计 31,187 Token；返回两次 replace，修复看板测试，无 write、无截断。独立 Node 45 pass、0 fail、9 UI todo，原测试断言保留。局部修复通过，整张切片未完成；本次未补 UI，不能把输出减少全部解释为同等工作量的效率提升。未续跑原任务、未重置预算。证据见 `docs/evidence/content-workbench-continuation-validation.md`。
+
+2026-09-20：按用户要求强化受限实现的局部替换提示。已确认失败请求所在执行器原本提供 replace，v1 也有简短优先提示；新增并激活 slice-implementer/v2，明确已有文件的小修改用唯一精确片段 replace，禁止整文件 old/new 变相重写，write 保留给新文件或绝大部分仍待实现的骨架。提示词注册及控制流相关 21 项测试通过，差异检查通过；未新增真实模型调用，尚未验证输出量或截断率改善，未修改截断恢复策略。
+
+2026-09-20：用户明确批准将隔离产品需求／架构／代码／测试发送给 DeepSeek 后，完成剩余切片真实续跑：新增 16 次 HTTP、302,495 Token。任务／选题切片经控制流切换后两次实现通过，累计 40 项测试通过。看板／页面切片也成功切换，但第三次受限实现输出达到 8,192 tokens 后被截断，工具参数无效；单批 max_calls=1 的协议错误路径最终报 model_loop_call_budget_exceeded，并非四次实现或六十次总预算耗尽。独立全量 Node 为 40 pass、1 fail、9 todo；整页未启动、未验收。未人工补生成代码或改变 Runtime，截断恢复策略待用户决定。证据见 `docs/evidence/content-workbench-continuation-validation.md`。
+
+2026-09-20：按确认方案从 e034 同步基线后，实现普通 Developer 首次推进违约即终止旧对话、独立受限实现、依赖映射及通过证据哈希校验、Runtime 自测／提交和跨恢复四次预算。新增 17 项机制回归，完整 241 项通过。唯一 materials 局部 DeepSeek 样本 7 次有效响应、76,859 Token；另三次初始 ConnectError 保留且计入总请求 10／12。切换后两次实现调用补齐实现及八项真实测试，Runtime 自测／提交和独立 Node 均 26／26、零 todo，只改两个拥有文件。额外五组独立验收通过，真实浏览器模块错误恢复／搜索／刷新持久化通过；实际页面保存仍失败，未实现 UI 的旧依赖引用返回 404，完整产品未交付、未验收。主工作区 API／Worker 未加载本工作区代码，未重启或更新它们。单样本不证明稳定性或 Token 降幅；详细证据见 `docs/evidence/materials-control-switch-validation.md`。
+
+2026-09-20：按用户要求新增素材管理流程“已解决问题与解决过程”文档，独立记录文件工具参数别名、骨架结构纠正、重复 owner 门禁、已交付接口—文件映射、错误测试修复及修改后复测、过期失败证据六项问题的现象、证据、原因、尝试、最终修复、验证和适用边界。当前未解决的普通开发读取循环明确排除，不包装为成功。文档见 `docs/evidence/content-workbench-resolved-issues.md`。
+
+2026-09-20：实现并验证重复读取后的推进约束：后续批次只允许写入、自测或结构化重规划；普通单元开发跨批写入后也必须立即自测；推进错误优先于重复区间错误，并把明确指令写入下一模型请求上下文。完整 224 项回归通过。但基于同一 materials 真实夹具的四次后续 DeepSeek 局部复测均未完成：共 34 次／322,089 Token；其中一次在第 8 次调用写入实现，其余没有写入，全部未测试、提交或重规划。连同首次门禁样本共 42 次／396,835 Token，均 failed；Node 始终为前置 18 pass、materials 8 todo。当前结论是 ToolResult／上下文约束能拒绝动作，却不能稳定改变 DeepSeek 决策，已停止同类付费重试。下一方案应改变控制流，避免继续同一对话循环。证据见 `docs/evidence/content-workbench-transactional-repair-validation.md`。
+
+2026-09-20：完成普通开发读取门禁的局部真实 DeepSeek 验证，复用素材管理两张基础切片通过后的工作区，只运行 `materials-library` Developer，最多 10 次调用。实际 8 次／74,746 Token 后仍以 `unit_development_no_progress` 失败；Runtime 拦截 10 次完整重复读取，但模型没有写入、测试、提交或重规划。独立 Node 结果为 18 pass、8 materials todo、0 fail，不能视为切片通过。结果证明当前门禁只能止损，下一步需在首次重复读取后把下一批动作收窄为写入、自测或结构化重规划。原始证据位于 `/private/tmp/materials-repeat-read-local-v2-20260920`，分析见 `docs/evidence/content-workbench-transactional-repair-validation.md`。
+
+2026-09-20：逐批复核素材管理主任务最后 8 个 Developer 批次，确认普通开发存在未修改文件的语义重复读取：materials 实现／测试各读 3 次，`task-view.js` 完整读 2 次，`storage.js` 后续三个区间均已被首次头部和尾部读取覆盖；后期只有关系测试是新增证据。Runtime 新增基于工具实际返回行区间的覆盖门禁，只拒绝已完整覆盖的读取，允许未读尾部／间隙，并在同文件成功写入后重置；不把模型自述或程序推断成“依赖齐全”。局部 4 项及完整 222 项回归通过；尚未再次运行付费全链路。证据见 `docs/evidence/content-workbench-transactional-repair-validation.md`。
+
+2026-09-20：执行修复后的真实 DeepSeek 素材管理全流程，结果仍为 `failed / develop / unit_development_no_progress`，未进入全量测试、启动或浏览器验证。主任务累计 62 次 HTTP、716,521 Token：产品 16,791、架构 262,468、Dev Design 43,553、Develop 393,709。过程中修复三项新暴露机制问题：文件工具兼容模型误用 `file_path`；骨架纠正反馈携带候选结构、明确合并文件及路径前缀；已交付 owner 即使不重复文件也会被拒绝，恢复中的旧卡先重新校验并自动重规划。前两张切片分别通过 9 项与累计 18 项 Node 测试，第三张 materials 卡已收敛为只拥有 materials，但 Developer 在读到正确的 `task-view.js`／`storage.js` 依赖后仍重复读取、不写代码。完整 219 项项目回归通过。另一个全新入口样本因 `file_path` 参数问题在 20 次／147,556 Token 时失败，作为故障复现保留，不与主任务 62 次混计。证据见 `docs/evidence/content-workbench-transactional-repair-validation.md`、`/private/tmp/content-workbench-full-v5-20260920` 和 `/private/tmp/content-workbench-full-v5b-20260920`。
+
+2026-09-20：完成 `slice-planner` v4／v5 两类真实 DeepSeek 对比，共 6 次 HTTP、84,866 Token。最小构造故障中 v4 重复拥有已交付 materials，v5 只拥有 topics；真实首次规划回放中两版都生成可执行 topics 单模块卡；复用历史校验失败后的重试请求时，v4 卡片仍因 `slice_required_interfaces_mismatch` 不可执行，v5 生成可通过 Runtime 校验的 topics 单模块卡。结果支持 v5 改善已交付依赖边界及校验反馈后的稳定性，但单次样本不证明稳定成功率或全链路 Token 降幅。证据见 `docs/evidence/content-workbench-transactional-repair-validation.md` 和 `/private/tmp/slice-planner-v4-v5-comparison-20260920`。
+
+2026-09-20：修复真实素材管理第二张卡重复纳入已通过 storage／materials、导致切片膨胀的问题。`slice-planner` 升至 v5：已交付模块默认只作为 `required_interfaces` 的只读依赖，不得再次进入 owners、实现文件和测试文件；确需改变既有行为时必须声明 `rework_delivered_modules` 及逐模块原因。Runtime 会拒绝未经声明的重复模块，并只向 Developer 预载当前卡可写文件；历史模块仍可按需读取，程序回归仍覆盖全部已通过测试。Planner 的 passed_slices 与最近测试结果改为紧凑摘要，避免重复传输测试输出。局部 7 项及完整 218 项回归通过；真实 DeepSeek 全链路尚未执行。
+
+2026-09-20：将真实素材管理第二张切片暴露的测试修复犹豫、重叠读取、修改后未复测问题完整记录为架构问题 006，串联问题发现、原因判断修正、v6／v7 无工具决策测试、两轮局部工具对比、提示词 v7、重叠读取门禁和修改后强制复测方案，以及 217 项机制回归与尚未完整重跑的边界。文档见 `docs/architecture-issues/006-test-repair-hesitation-and-forced-retest.md`。
+
+2026-09-20：完成“修改后强制复测”的真实 DeepSeek 局部回归。相同三文件失败夹具下，v6／v7 都正确修改测试、主动调用 `run_unit_tests` 并由模型循环成功结束，Node 1 项通过。v6 5 次调用／21,511 Token，修改后 4 个重复读取动作被 `unit_change_requires_self_test` 阻止后复测；v7 4 次／17,495 Token，修改后直接复测、未触发门禁。两版均不再耗尽 6 次预算，本次 v7 比 v6 少 1 次调用和 4,016 Token。证据追加至 `docs/evidence/content-workbench-transactional-repair-validation.md`，原始结果位于 `/private/tmp/slice-prompt-tool-comparison-retest-20260920`。
+
+2026-09-20：修复局部工具对比暴露的“修改后没有强制复测”。Runtime 同时识别当前工具历史的失败自测与版本匹配的外部 `unit_test_feedback`；失败修复中的某批 `write`／`replace` 成功后，下一模型批次只允许 `run_unit_tests`，其他读取、诊断、提交或跨批修改返回 `unit_change_requires_self_test`。同批相关修改仍允许；复测失败后恢复必要诊断，复测通过后才能提交。完整 217 项回归、Python 编译及差异检查通过；尚未再次付费局部复跑。
+
+2026-09-20：完成 v6／v7 各一次真实 DeepSeek 局部工具行为对比。相同三文件夹具和失败证据下，两者都正确修改测试且独立 Node 1 项通过；v6 第 4 次模型调用修改，修改前 6 个读取动作、24,475 Token，v7 第 2 次调用修改，修改前 2 个读取动作、26,887 Token。两者修改后都未调用 `run_unit_tests`，继续读取直至 6 次预算耗尽，所以局部流程均未正常交接。本夹具的初始失败来自 `unit_test_feedback` 而非同一历史中的自测，未触发重叠读取门禁；同时暴露修改后应强制复测、不能重新诊断。证据追加至 `docs/evidence/content-workbench-transactional-repair-validation.md`，原始结果位于 `/private/tmp/slice-prompt-tool-comparison-20260920`。
+
+2026-09-20：完成 v6／v7 各一次真实 DeepSeek 低成本决策对比。相同输入包含本轮 `tasks.test.js` 失败、装配片段及已知实现，不开放工具；两个版本都正确选择 `test / modify_test`，提出把 `topics.configureInjectedCallbacks` 改为 `tasks.configureInjectedCallbacks`，并保持 acceptance 与覆盖强度。v6 1,637 Token，v7 1,599 Token，两次合计 3,236。该样本证明两个版本在证据完整时都会口头决定修测试，不能证明真实工具行为差异；后续用局部工具回放验证实际修改，不再为单次提示词调整跑完整全链路。证据追加至 `docs/evidence/content-workbench-transactional-repair-validation.md`，原始响应位于 `/private/tmp/slice-prompt-v6-v7-comparison-20260920`。
+
+2026-09-20：修复本轮真实 DeepSeek 在第二张切片自测失败后的重复读取。`slice-developer` 升至 v7，明确允许在保持 acceptance 语义与覆盖强度时修正错误回调对象、夹具、数量计算或环境假设，不再把正确修测试与削弱测试混同。Runtime 记录失败后已读文件及行区间；同一文件哈希未变时，改变行号或描述再次读取重叠区域会返回 `self_test_repeated_read_requires_change`，要求实际修改、结构化重规划或设计阻塞；非重叠必要依赖仍可读取，修改后门禁解除。完整 215 项回归、提示词哈希、Python 编译和差异检查通过；尚未再次付费续跑，不宣称真实链路已成功。
+
+2026-09-20：按授权从空工作区重新运行真实 DeepSeek 素材管理全链路。第一张 storage／materials 切片完成，13 项 Node 测试通过；第二张 topics-management 卡同时包含 topics、tasks、storage、materials，模型在 `tasks.test.js` 的单项失败后连续重复读取同一片段，未写入，最终 `failed / develop / unit_development_no_progress`。实际 35 次 HTTP，输入 582,267／输出 43,199／合计 625,466 Token；Develop 占 541,171，其中第二张切片 418,147。当前全部 Node 为 35 通过、1 失败、11 todo，未进入全量测试、启动、浏览器或集成返修，因此本轮不能验证事务式返修的实际降耗。证据见 `docs/evidence/content-workbench-transactional-repair-validation.md` 和 `/private/tmp/content-workbench-transactional-v1b-20260920`。
+
+2026-09-20：针对 7,204,615 Token 素材管理运行中调用 154～160 的旧浏览器失败空转，完成失败证据版本化、返修上下文瘦身及事务式返修。失败快照过期时先零模型复跑 Playwright；返修只传失败证据、验收／执行卡及文件路径和哈希，不预载源码或开放原始历史详情。每份失败证据最多两次模型调用，首次文件变化立即由程序复验；无变化不再使用相同证据重试，只有新验证输出才允许第二轮，整个业务切片返修跨 Worker 最多四次调用。完整 213 项回归、Python 编译及差异检查通过；新的付费全链路尚未运行，不宣称 Token 已实际下降。
+
+2026-09-19：修复素材管理全链路最后阶段的错误归因与大文件返修失控。确认生成产品 6 个业务切片和 53 项 Node 测试均已完成；浏览器失败来自 `verify_product.py` 三处错误断言：4 条素材删除 1 条后误期望 2 条、刷新后继续误期望 2 条、用隔离 browser context 验证 localStorage 持久化。修正验证证据后，真实 Chromium 全流程 42 项检查全部通过、页面脚本错误 0。Runtime 新增 `read(start_line,end_line)`，单元开发读取超过 200 行文件默认只返回预览并引导局部读取，已有 `replace` 负责唯一片段原子替换；`slice-developer` 升至 v6，加入数据数量账本、localStorage context 语义及先核验测试脚本规则。项目完整 206 项回归、生成产品 53 项 Node 测试通过。原 DeepSeek 自动运行仍如实记为 `failed / unit_submission_required`：184 HTTP、7,204,615 Token；最终浏览器脚本由开发助手确定性修正，因此不能声称 v6 已通过新的付费全链路自主验证。
+
+2026-09-19：完成「架构阶段先生成代码骨架，再逐业务切片实现」的真实 DeepSeek 素材管理验证。骨架内部纠正后生成 17 文件／6 模块；infra、material 两片一次通过，topic 因删除验收依赖未实现的 `task.hasTaskForTopic` 且卡片未拥有 task 文件而失败。运行中修复骨架纠正、控制信号解析、重规划历史冲突和显式恢复历史冲突，并将 slice-developer 升至 v4、增加结构化 `request_slice_replan`；DeepSeek 真实续跑仍未调用该工具，最终 `failed / develop / unit_development_no_progress`。实际 78 HTTP、1,408,466 Token，其中 Develop 66 HTTP／1,306,126 Token；最终 Node 61 项为 33 通过、1 失败、27 todo。流程未完整交付且未降低 Token，证据见 `docs/evidence/architecture-scaffold-validation.md`。
+
 2026-09-19：按用户确认将新任务从真人式全量计划／逐单元文档交接改为 AI 原生逐业务切片闭环。架构只创建绑定上游哈希的 delivery-plan；Dev Design 只生成第一张结构化执行卡；Develop 在当前切片自测和程序真实 Node 回归通过后才规划下一片。新增 slice-planner／slice-developer v1、最多 12 片、Step 总调用预算不重置、纯测试／文档／验证切片拒绝、REPLAN 内部调整和 BLOCKED 关键决策边界；全部完成后保留全量测试、HTTP、浏览器和人工验收。已有 development-plan 任务继续原恢复入口。全量 185 项回归、Python 编译、提示词哈希及差异检查通过；Fake 模型＋真实 Node 验证一片实现后才规划 complete。尚未运行真实 Provider，不宣称素材管理完整交付或 Token 改善。证据见 `docs/evidence/slice-workflow-validation.md`。
 
 2026-09-19：完成素材管理提示词 v2 真实 DeepSeek 全链路评测。v2 按数据所有权把计划从 v1 的 11 单元降到 9 单元，但仍错误拆出 verification 单元；流程在 tasks_unit Dev Design 连续五轮无法调和来源上下文验收与未声明 topics／materials 依赖，最终 `failed / dev_design / unit_design_review_failed`，未进入开发。实际 34 HTTP，输入 302,129／输出 45,697／总计 347,826 Token；产品 18,550、架构 61,957、Dev Design 267,319。因完成阶段比 v1 的 develop 更早，低消耗不计为优化成功。v2 结果和证据完整保留，注册表已恢复激活 v1，下一版需让规划器同时校验验收行为、依赖和唯一所有权形成闭环。
@@ -288,6 +332,8 @@ Planner 只允许返回以下动作：
 - v1 只有路径与进程级最小隔离，不是真正的安全沙箱；不得用于执行不可信需求或访问真实个人数据。
 
 ## 最近验证证据
+
+- 2026-09-19：按确认方案在首轮新建架构正式化后增加受限代码骨架子阶段，不修改数据库 schema。`architecture-scaffolder/v1` 一次生成模块接口、应用装配、固定入口和逐模块 `test.todo`；程序校验路径、模块文件归属、固定入口、JavaScript 语法与真实 Node 测试发现，保存哈希绑定的 `scaffold-contract.json`。Slice Planner／Developer 升至 v2，仍有骨架 todo 时必须选择对应业务测试，本片 todo／skip 未清零不能通过或 complete；已有产品架构返工和旧任务不覆盖代码。完整后端 188 项、Python 编译、8 个提示词哈希及差异检查通过；真实 DeepSeek 素材管理复跑尚未执行。证据见 `docs/evidence/architecture-scaffold-validation.md`。
 
 - 2026-09-19：真实 DeepSeek 从空工作区运行素材管理逐业务切片流程，111 次 HTTP 尝试、105 次有效响应、1,602,673 Token；产品、架构和首片 Dev Design 完成，未要求用户处理内部决策，但最终 `failed / develop`，未进入全量测试、启动或浏览器验收。Dev Design 降至 17,460 Token，Develop 升至 1,533,615。实测发现程序把只运行 7 个 storage 断言的复用测试误当成后续 8 张切片通过，第 10 张完整 UI 交付片又因范围和上下文过大耗尽 100 次调用。已修复内部校验误澄清及缺固定入口时直接失败，并增加回归测试；测试覆盖绑定和 Developer 上下文收敛仍为当前阻塞。证据见 `docs/evidence/slice-workflow-validation.md` 和 `/private/tmp/content-workbench-slice-v1-20260919`。
 

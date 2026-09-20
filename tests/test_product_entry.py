@@ -95,7 +95,7 @@ def test_nested_module_repair_refreshes_all_files_and_runs_discovered_test(tmp_p
     def repair(db, task, run, instructions, input_text, context, tools, **kwargs):
         # 模拟模型仅修改真实故障模块，其他文件保持原样。
         contexts.append(context)
-        assert kwargs['stop_when'] is None
+        assert callable(kwargs['stop_when'])
         (product / "js/value.cjs").write_text("module.exports = 42", encoding="utf-8")
         return "done"
 
@@ -112,7 +112,9 @@ def test_nested_module_repair_refreshes_all_files_and_runs_discovered_test(tmp_p
         db.commit()
         worker.handle_develop(db, task, run, tools)
         assert task.cur_step == Step.test
-        assert contexts[0]['current_product_files']['product/js/value.cjs'] == 'module.exports = -1'
+        assert 'current_product_files' not in contexts[0]
+        assert contexts[0]['provide_file_contents'] is False
+        assert 'product/js/value.cjs' in contexts[0]['snapshot']['file_sha256']
         assert 'product/test-cases/domain.test.cjs' in contexts[0]['snapshot']['file_sha256']
         assert tools._exec("run", "node --test")["exit_code"] == 0
         test_run = worker.create_step_run(db, task)
@@ -152,7 +154,8 @@ def test_new_module_is_available_to_next_repair_attempt(tmp_path, monkeypatch):
             (product / 'js/value.cjs').write_text("module.exports = require('./new.cjs')")
         else:
             assert 'product/js/new.cjs' in context['existing_product_files']
-            assert context['current_product_files']['product/js/new.cjs'] == 'module.exports = -1'
+            assert 'current_product_files' not in context
+            assert 'product/js/new.cjs' in context['snapshot']['file_sha256']
             (product / 'js/new.cjs').write_text('module.exports = 42')
         return 'done'
 

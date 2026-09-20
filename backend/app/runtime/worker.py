@@ -100,6 +100,154 @@ def _repair_actions_without_write(entries: list[dict], history_key: str) -> int:
     return count
 
 
+def _read_interval(parameters: dict) -> tuple[int, int]:
+    # 把全文读取和局部读取归一为可比较的闭区间。
+    start = parameters.get("start_line")
+    end = parameters.get("end_line")
+    return (start if type(start) is int else 1,
+            end if type(end) is int else sys.maxsize)
+
+
+def _unchanged_read_is_covered(entries: list[dict], history_key: str, action: ToolCall) -> bool:
+    # 普通开发中拒绝再次读取同一未修改文件内已完整覆盖的行区间。
+    if action.tool_name != "read":
+        return False
+    path = action.parameters.get("path") or action.parameters.get("file_path")
+    if not path:
+        return False
+    intervals = []
+    known_total = 0
+    for entry in entries:
+        if entry.get("history_key", "default") != history_key:
+            continue
+        previous = entry.get("action", {})
+        previous_path = previous.get("parameters", {}).get("path") or previous.get("parameters", {}).get("file_path")
+        result = entry.get("result", {})
+        if previous_path != path or result.get("status") != "succeeded":
+            continue
+        if previous.get("tool_name") in {"write", "replace"}:
+            intervals = []
+            continue
+        if previous.get("tool_name") != "read":
+            continue
+        output = result.get("output") or {}
+        start = output.get("start_line", 1)
+        end = output.get("end_line", output.get("total_lines"))
+        total = output.get("total_lines")
+        if type(total) is int:
+            known_total = max(known_total, total)
+        if type(start) is int and type(end) is int and end >= start:
+            intervals.append((start, end))
+    requested_start, requested_end = _read_interval(action.parameters)
+    if requested_end == sys.maxsize:
+        if not intervals or not known_total or not any(start == 1 for start, _ in intervals):
+            return False
+        requested_end = known_total
+    covered_until = requested_start - 1
+    for start, end in sorted(intervals):
+        if start > covered_until + 1:
+            break
+        if end >= requested_start:
+            covered_until = max(covered_until, end)
+        if covered_until >= requested_end:
+            return True
+    return False
+
+
+def _covered_read_requires_progress(entries: list[dict], history_key: str,
+                                    model_request_id: str, action: ToolCall) -> bool:
+    # 重复读取被拒绝后，持续要求写入、自测或重规划，避免模型改读其他已知文件空转。
+    relevant = [entry for entry in entries if entry.get("history_key", "default") == history_key]
+    guard_index = None
+    guard_request_id = None
+    for index in range(len(relevant) - 1, -1, -1):
+        entry = relevant[index]
+        result = entry.get("result") or {}
+        if result.get("status") == "failed" and result.get("error") == "unchanged_file_read_already_covered":
+            guard_index = index
+            guard_request_id = entry.get("model_request_id")
+            break
+    if guard_index is None:
+        return False
+    allowed = {"write", "run_unit_tests", "request_slice_replan"}
+    for entry in relevant[guard_index + 1:]:
+        if entry.get("model_request_id") == guard_request_id:
+            continue
+        if (entry.get("action", {}).get("tool_name") in allowed
+                and entry.get("result", {}).get("status") == "succeeded"):
+            return False
+    return model_request_id != guard_request_id and action.tool_name not in allowed
+
+
+def _repeated_failed_self_test_read(entries: list[dict], history_key: str, action: ToolCall) -> bool:
+    # 自测失败后阻止读取同一未变文件的重叠区域，迫使流程进入修改、重规划或阻塞。
+    if action.tool_name != "read":
+        return False
+    relevant = [entry for entry in entries if entry.get("history_key", "default") == history_key]
+    failure_index = None
+    for index in range(len(relevant) - 1, -1, -1):
+        entry = relevant[index]
+        if (entry.get("action", {}).get("tool_name") == "run_unit_tests"
+                and entry.get("result", {}).get("status") == "succeeded"
+                and entry.get("result", {}).get("output", {}).get("passed") is False):
+            failure_index = index
+            break
+    if failure_index is None:
+        return False
+    later = relevant[failure_index + 1:]
+    if any(entry.get("action", {}).get("tool_name") in {"write", "replace"}
+           and entry.get("result", {}).get("status") == "succeeded" for entry in later):
+        return False
+    path = action.parameters.get("path")
+    requested_start, requested_end = _read_interval(action.parameters)
+    for entry in later:
+        previous = entry.get("action", {})
+        if (previous.get("tool_name") != "read" or previous.get("parameters", {}).get("path") != path
+                or entry.get("result", {}).get("status") != "succeeded"):
+            continue
+        previous_start, previous_end = _read_interval(previous.get("parameters", {}))
+        if max(requested_start, previous_start) <= min(requested_end, previous_end):
+            return True
+    return False
+
+
+def _failed_unit_change_requires_test(entries: list[dict], history_key: str,
+                                      model_request_id: str, action: ToolCall,
+                                      external_failure: bool = False) -> bool:
+    # 失败修复产生文件变化后，下一批只能复测，不能重新读取或继续跨批修改。
+    relevant = [entry for entry in entries if entry.get("history_key", "default") == history_key]
+    failed = external_failure
+    pending_change = None
+    for entry in relevant:
+        tool_name = entry.get("action", {}).get("tool_name")
+        result = entry.get("result", {})
+        if (tool_name == "run_unit_tests" and result.get("status") == "succeeded"):
+            failed = result.get("output", {}).get("passed") is False
+            pending_change = None
+        elif (failed and tool_name in {"write", "replace"}
+              and result.get("status") == "succeeded"):
+            pending_change = entry.get("model_request_id")
+    return bool(pending_change and pending_change != model_request_id
+                and action.tool_name != "run_unit_tests")
+
+
+def _unit_change_requires_test(entries: list[dict], history_key: str,
+                               model_request_id: str, action: ToolCall) -> bool:
+    # 普通单元开发跨批成功写入后也必须立即自测，用真实结果替代继续读取确认。
+    pending_change = None
+    for entry in entries:
+        if entry.get("history_key", "default") != history_key:
+            continue
+        tool_name = entry.get("action", {}).get("tool_name")
+        result = entry.get("result", {})
+        if tool_name == "run_unit_tests" and result.get("status") == "succeeded":
+            pending_change = None
+        elif tool_name in {"write", "replace"} and result.get("status") == "succeeded":
+            pending_change = entry.get("model_request_id")
+    return bool(pending_change and pending_change != model_request_id
+                and action.tool_name != "run_unit_tests")
+
+
 def workspace_for(task: Task) -> Path:
     # 解析当前任务的独立工作区路径。
     return Path(task.workspace_path or settings.workspace_root / str(task.id)).resolve()
@@ -360,8 +508,9 @@ def build_tool_context(task: Task, run: StepRun, context: dict, history: list[di
         # 单元开发只刷新当前单元与依赖范围，避免轮内读取结果立即丢失。
         scope = set(context["unit_file_scope"])
         paths = [path for path in paths if str(path.relative_to(root)) in scope]
-    if context.get("current_product_files") or "unit_file_scope" in context:
-        # 修订阶段继续提供完整当前快照；近期原始交互携带相同全文时不重复。
+    provide_file_contents = context.get("provide_file_contents", True)
+    if provide_file_contents and (context.get("current_product_files") or "unit_file_scope" in context):
+        # 首次开发可提供范围内快照；返修默认只给清单与哈希，源码由模型按需读取。
         contents = {str(path.relative_to(root)): path.read_text(encoding="utf-8", errors="replace") for path in paths}
         for entry in projected["tool_history"]:
             action = entry.get("action", {})
@@ -419,8 +568,13 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                     stop_when: Callable[[], bool] | None = None,
                     tool_schemas: list[dict] | None = None,
                     history_key: str = "default",
-                    runtime_step: Step | None = None) -> str:
+                    runtime_step: Step | None = None,
+                    max_calls: int | None = None,
+                    single_batch: bool = False) -> str:
     # 在预算内循环调用模型、执行工具并保存过程证据。
+    if max_calls is not None and (type(max_calls) is not int or max_calls <= 0):
+        raise ValueError("model_loop_max_calls_invalid")
+    initial_model_call_count = run.model_call_count
     prompt = instructions if isinstance(instructions, PromptContent) else None
     instruction_text = prompt.text if prompt else instructions
     checkpoint = Path(run.checkpoint_path) if run.checkpoint_path else None
@@ -443,6 +597,11 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             save_checkpoint(run, checkpoint_entries)
             history = [entry for entry in checkpoint_entries
                        if entry.get("result") and entry.get("history_key", "default") == history_key]
+    # 已持久化的推进违约直接交回切片 Runtime，恢复不能重新请求旧对话。
+    if context.get("switch_on_progress_violation") and any(
+            entry.get("result", {}).get("error") == "covered_read_requires_write_test_or_replan"
+            for entry in history):
+        return "DEVELOPER_PROGRESS_SWITCH"
     # 根据阶段选择主 Provider，技术失败时才尝试受控降级。
     primary_runtime = create_model_runtime(db, runtime_step or task.cur_step)
     text_without_submit = 0
@@ -460,7 +619,8 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                 if tools.restore_submission(entry['result'].get('output', {})):
                     return 'SUBMITTED_FOR_TEST'
                 break
-    while run.model_call_count < MAX_MODEL_CALLS_PER_STEP:
+    while (run.model_call_count < MAX_MODEL_CALLS_PER_STEP
+           and (max_calls is None or run.model_call_count - initial_model_call_count < max_calls)):
         if context.get('require_unit_submission'):
             from .unit_workflow import file_hashes
             versions = file_hashes(workspace_for(task), context['owned_files'])
@@ -488,8 +648,19 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
         # 只给执行阶段增加只读查询，保持无工具 Planner 和文档作者的原边界。
         schemas = TOOL_SCHEMAS if tool_schemas is None else tool_schemas
         if any(schema["function"]["name"] in {"read", "exec"} for schema in schemas):
-            schemas = schemas + QUERY_TOOL_SCHEMAS
-        tool_instructions = "每次工具调用用 description 简述目的。当前文件版本以 product_file_manifest 为准；tool_summaries 是当前循环按文件合并的最近读取／写入状态，不是历史流水。current_requested_data 返回本次请求的读取／查询数据，content_source=current_product_files 表示全文已在当前快照。已完整读取且哈希未变的文件不要重复读。development_state 是当前单元交接提示，文件齐备不等于测试通过；按 next_action 进行自测、修复或交接；require_unit_submission=true 时必须调用 submit_unit_for_test，普通完成文本不能替代提交。仅可使用本次提供的工具。earlier_summary_count 表示省略的文件状态数。不得把历史执行成功当作当前代码已验证。"
+            query_schemas = QUERY_TOOL_SCHEMAS
+            if context.get("allow_history_detail") is False:
+                # 返修只允许摘要查询，禁止重新取回包含整文件写入参数的原始历史详情。
+                query_schemas = [schema for schema in query_schemas
+                                 if schema["function"]["name"] != "get_tool_execution_detail"]
+            schemas = schemas + query_schemas
+        tool_instructions = "每次工具调用用 description 简述目的。当前文件版本以 product_file_manifest 为准；tool_summaries 是当前循环按文件合并的最近读取／写入状态，不是历史流水。current_requested_data 返回本次请求的读取／查询数据。已完整读取且哈希未变的文件不要重复读。development_state 是当前单元交接提示，文件齐备不等于测试通过；按 next_action 进行自测、修复或交接；require_unit_submission=true 时必须调用 submit_unit_for_test，普通完成文本不能替代提交。仅可使用本次提供的工具。earlier_summary_count 表示省略的文件状态数。不得把历史执行成功当作当前代码已验证。"
+        if context.get("provide_file_contents", True):
+            # 首次开发说明预载源码的引用规则，返修不声称存在全文快照。
+            tool_instructions += "content_source=current_product_files 表示全文已在当前快照。"
+        else:
+            # 返修只携带失败证据与文件版本，要求围绕报错位置局部读取。
+            tool_instructions += "返修上下文不预载源码；只按失败位置 read 必要行，不查询原始历史详情。"
         if context.get('require_unit_submission'):
             # 开发自测与后续独立验证分开，旧失败不代表修改后的版本仍失败。
             tool_instructions += '开发必须先 run_unit_tests 自测，当前版本通过后才 submit_unit_for_test。修改使旧结果过期，应重新自测；unit_self_test 返回真实自测结果，旧 unit_test_feedback/global_failure 是修复依据，不能认定未复测的新版本仍有原错误。'
@@ -643,6 +814,7 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             return result.text
         # 工具执行前保存待办检查点，便于故障恢复。
         for index, action in enumerate(result.actions, start=run.last_completed_action_index + 1):
+            guard_code = None
             entry = {"history_key": history_key, "model_request_id": result.request_id,
                      "action": action.__dict__}
             if context.get('require_unit_submission'):
@@ -655,12 +827,39 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                                     and action.tool_name != "write"
                                     and _repair_actions_without_write(checkpoint_entries, history_key)
                                     >= MAX_REPAIR_ACTIONS_WITHOUT_WRITE)
+            repeated_failed_read = (context.get('require_unit_submission')
+                                    and _repeated_failed_self_test_read(checkpoint_entries, history_key, action))
+            covered_unchanged_read = (context.get('require_unit_submission')
+                                      and _unchanged_read_is_covered(checkpoint_entries, history_key, action))
+            covered_read_requires_progress = (context.get('require_unit_submission')
+                                              and _covered_read_requires_progress(
+                                                  checkpoint_entries, history_key,
+                                                  result.request_id, action))
+            unit_feedback = context.get('unit_test_feedback') or {}
+            change_requires_test = (context.get('require_unit_submission')
+                                    and _failed_unit_change_requires_test(
+                                        checkpoint_entries, history_key, result.request_id, action,
+                                        external_failure=unit_feedback.get('passed') is False))
+            unit_change_requires_test = (context.get('require_unit_submission')
+                                         and _unit_change_requires_test(
+                                             checkpoint_entries, history_key,
+                                             result.request_id, action))
             # 阻止连续重复动作和返修中无写入循环。
             invalid_submit = (context.get('require_unit_submission') and action.tool_name == 'submit_unit_for_test'
                               and action is not result.actions[-1])
-            if repeated >= MAX_IDENTICAL_TOOL_ACTIONS or repair_without_write or invalid_submit:
+            if (repeated >= MAX_IDENTICAL_TOOL_ACTIONS or repair_without_write or invalid_submit
+                    or repeated_failed_read or covered_unchanged_read
+                    or covered_read_requires_progress or change_requires_test
+                    or unit_change_requires_test):
                 # 阻止连续重复动作和返修中无写入循环。
-                code = 'submission_must_be_last' if invalid_submit else "repeated_tool_action" if repeated >= MAX_IDENTICAL_TOOL_ACTIONS else "repair_tool_loop_no_write"
+                code = ('submission_must_be_last' if invalid_submit else
+                        'unit_change_requires_self_test' if (change_requires_test or unit_change_requires_test) else
+                        'self_test_repeated_read_requires_change' if repeated_failed_read else
+                        'covered_read_requires_write_test_or_replan' if covered_read_requires_progress else
+                        'unchanged_file_read_already_covered' if covered_unchanged_read else
+                        "repeated_tool_action" if repeated >= MAX_IDENTICAL_TOOL_ACTIONS else
+                        "repair_tool_loop_no_write")
+                guard_code = code
                 safe_record_trace(db, task, run, "tool_guard", "failed", "阻止无效工具循环", code,
                                   {"action": action.__dict__, "reason": code},
                                   {"history_key": history_key, "reason": code})
@@ -674,12 +873,26 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             history.append(entry)
             checkpoint_entries.append(entry)
             save_checkpoint(run, checkpoint_entries)
+            if guard_code in {"unchanged_file_read_already_covered",
+                              "covered_read_requires_write_test_or_replan"}:
+                context = {**context, "unit_progress_feedback": {
+                    "error": guard_code,
+                    "instruction": ("已成功读取的未修改文件内容仍然有效。下一次响应不得继续 read；"
+                                    "只能写入当前 owned_files、调用 run_unit_tests，或调用 request_slice_replan。"),
+                }}
             if tool_result.status == "succeeded":
                 run.last_completed_action_index = index
             db.commit()
+            if (context.get("switch_on_progress_violation")
+                    and guard_code == "covered_read_requires_write_test_or_replan"):
+                # 首次违反已给出的推进约束即结束，剩余同批动作也不能继续旧流程。
+                return "DEVELOPER_PROGRESS_SWITCH"
             if tool_result.status == "succeeded" and stop_when and stop_when():
                 return 'SUBMITTED_FOR_TEST' if context.get('require_unit_submission') else result.text
-    raise RuntimeError("model_call_limit_exceeded")
+        if single_batch:
+            # 受限实现处理完整写入批次后交回 Runtime，由程序负责测试与有界修复。
+            return result.text
+    raise RuntimeError("model_loop_call_budget_exceeded" if max_calls is not None else "model_call_limit_exceeded")
 
 
 def finish_step(db: Session, task: Task, run: StepRun, next_step: Step):
@@ -734,6 +947,37 @@ def product_code_hashes(task: Task) -> dict[str, str]:
     return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted((root / "product").rglob("*"))
             if path.is_file() and path.suffix in {".html", ".css", ".js", ".cjs", ".mjs", ".py"}}
+
+
+def write_verification_evidence(task: Task, unit: ToolResult | None, browser: ToolResult) -> Path:
+    # 同时保存人可读报告与被验证代码版本，返修时可判断失败证据是否已经过期。
+    root = workspace_for(task)
+    report = root / "evidence/verification-report.md"
+    unit_section = ("## JavaScript 单元测试\n\n```json\n" +
+                    json.dumps(unit.__dict__, ensure_ascii=False, indent=2) + "\n```\n\n") if unit else ""
+    report.write_text("# 验证报告\n\n" + unit_section +
+                      "## Playwright 浏览器验证\n\n```json\n" +
+                      json.dumps(browser.__dict__, ensure_ascii=False, indent=2) + "\n```\n",
+                      encoding="utf-8")
+    write_json_atomic(root / "evidence/verification-evidence.json", {
+        "report_path": "evidence/verification-report.md",
+        "report_sha256": content_hash(report.read_text(encoding="utf-8")),
+        "file_hashes": product_code_hashes(task),
+        "browser_passed": (browser.status == "succeeded"
+                           and browser.output.get("exit_code") == 0
+                           and "[SKIP]" not in browser.output.get("stdout", "")),
+    })
+    return report
+
+
+def verification_evidence_matches(task: Task) -> bool | None:
+    # 旧任务没有版本证据时返回未知；有证据时严格比较当前产品代码哈希。
+    path = workspace_for(task) / "evidence/verification-evidence.json"
+    if not path.is_file():
+        return None
+    evidence = json.loads(path.read_text(encoding="utf-8"))
+    hashes = evidence.get("file_hashes")
+    return hashes == product_code_hashes(task) if isinstance(hashes, dict) else None
 
 
 def skipped_design_evidence(task: Task) -> dict[str, dict]:
@@ -1233,8 +1477,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
         run.input_path = source
         run.output_path = target
         if kind == "architecture":
-            from .slice_workflow import ensure_delivery_plan
-            ensure_delivery_plan(db, task, run, tools)
+            from .slice_workflow import prepare_architecture_delivery
+            prepare_architecture_delivery(db, task, run, tools)
         finish_step(db, task, run, NEXT_STEP[task.cur_step])
         return
 
@@ -1313,8 +1557,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
             run.input_path = source
             run.output_path = formal_version
             if kind == "architecture":
-                from .slice_workflow import ensure_delivery_plan
-                ensure_delivery_plan(db, task, run, tools)
+                from .slice_workflow import prepare_architecture_delivery
+                prepare_architecture_delivery(db, task, run, tools)
             finish_step(db, task, run, NEXT_STEP[task.cur_step])
             return
 
@@ -1371,8 +1615,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     run.input_path = source
     run.output_path = formal_version
     if kind == "architecture":
-        from .slice_workflow import ensure_delivery_plan
-        ensure_delivery_plan(db, task, run, tools)
+        from .slice_workflow import prepare_architecture_delivery
+        prepare_architecture_delivery(db, task, run, tools)
     finish_step(db, task, run, NEXT_STEP[task.cur_step])
 
 
@@ -1455,9 +1699,9 @@ def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     # 根据当前设计开发或返修生成软件并核对实现血缘。
     root = workspace_for(task)
     if (root / "docs/delivery-plan.json").is_file():
-        # 新任务在开发阶段形成“规划一片—实现—真实测试—再规划”的闭环。
-        from .slice_workflow import handle_develop as handle_slice_develop
-        handle_slice_develop(db, task, run, tools)
+        # 首次开发逐片闭环；集成失败则按文件所有权回到对应切片定向返修。
+        from .slice_workflow import handle_develop as handle_slice_develop, handle_repair as handle_slice_repair
+        (handle_slice_repair if task.repair_round > 0 else handle_slice_develop)(db, task, run, tools)
         return
     if (root / "docs/development-plan.json").is_file():
         # 新计划串行执行模块／功能测试闭环，旧任务保留原开发入口。
@@ -1520,7 +1764,7 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
     current_product_files = {
         str(path.relative_to(root)): path.read_text(encoding="utf-8", errors="replace")
         for path in product_files(root)
-    } if is_revision else {}
+    } if is_revision and not is_repair else {}
     versioned_designs = sorted((root / "docs").glob("dev-design-v*.md"))
     previous_dev_design = versioned_designs[-2].read_text(encoding="utf-8") if len(versioned_designs) >= 2 else ""
     versioned_products = sorted((root / "docs").glob("product-v*.md"))
@@ -1541,6 +1785,20 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
     latest_failure_report = report_path.read_text(encoding="utf-8") if report_path.is_file() else ""
     if previous_failed and previous_failed.step == Step.start_product:
         latest_failure_report = previous_failed.error or latest_failure_report
+    if (failure_source == Step.verify_product.value and task.result_url
+            and verification_evidence_matches(task) is False):
+        # 失败报告对应的代码已经变化时，先用当前版本复跑原验证，禁止继续把旧错误喂给模型。
+        command = f"{shlex.quote(sys.executable)} verify_product.py {shlex.quote(task.result_url)}"
+        refreshed = execute_tool(db, task, run, tools, ToolCall(
+            str(uuid.uuid4()), "exec", {"action": "run", "command": command}),
+            history_key=f"stale-verification-refresh:{run.id}")
+        report_path = write_verification_evidence(task, None, refreshed)
+        if (refreshed.status == "succeeded" and refreshed.output.get("exit_code") == 0
+                and "[SKIP]" not in refreshed.output.get("stdout", "")):
+            run.output_path = "product/implementation.md"
+            finish_step(db, task, run, Step.test)
+            return
+        latest_failure_report = report_path.read_text(encoding="utf-8")
     base_context = {"failure_source_step": failure_source,
                     "latest_failure_report": latest_failure_report,
                     "dev_design": dev_design, "design_source": design_source,
@@ -1552,19 +1810,24 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
                         "previous_dev_design": {"sha256": content_hash(previous_dev_design)} if previous_dev_design else None},
                     "existing_architecture": architecture,
                     "existing_product_files": existing,
-                    "current_product_files": current_product_files,
                     "acceptance_triage": acceptance_triage,
                     "previous_product": previous_product,
                     "previous_dev_design": previous_dev_design,
                     "dev_design_diff": dev_design_diff,
                     "previous_dev_design_hash": lineage.get("dev_design_hash"),
-                    "repair_round": task.repair_round}
+                    "repair_round": task.repair_round,
+                    "provide_file_contents": not is_repair,
+                    "allow_history_detail": not is_repair}
+    if current_product_files:
+        # 首次开发和非返修修订保留源码快照；返修只传文件清单与哈希。
+        base_context["current_product_files"] = current_product_files
     repair_feedback = None
     # 旧报告无法证明生成时的代码版本，不把当前哈希伪装成历史验证快照。
     failure_evidence_source = {"step_run_id": previous_failed.id if previous_failed else None,
                                "source": "step_error" if failure_source == Step.start_product.value else str(report_path.relative_to(root)),
                                "file_snapshot": "unknown", "sha256": content_hash(latest_failure_report)}
-    max_attempts = MAX_NO_CHANGE_CORRECTIONS + 1 if is_revision else 1
+    # 返修最多两轮；每轮只有新失败证据才能继续，普通修订保留既有纠正次数。
+    max_attempts = 2 if is_repair else MAX_NO_CHANGE_CORRECTIONS + 1 if is_revision else 1
     for repair_attempt in range(1, max_attempts + 1):
         attempt_before = {path: path.read_bytes() for path in product_files(root)}
         base_context = {**base_context,
@@ -1576,13 +1839,22 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
                         "failure_evidence_source": dict(failure_evidence_source)}
         # 每轮使用实际文件快照，避免纠正时仍把修改前的代码当作当前代码。
         if is_revision:
-            base_context = {**base_context, "latest_failure_report": latest_failure_report,
-                            "current_product_files": {
-                                str(path.relative_to(root)): content.decode("utf-8", errors="replace")
-                                for path, content in attempt_before.items()}}
+            # 每轮保留最新验证输出；只有非返修修订才预载完整源码。
+            base_context = {**base_context, "latest_failure_report": latest_failure_report}
+            if not is_repair:
+                base_context["current_product_files"] = {
+                    str(path.relative_to(root)): content.decode("utf-8", errors="replace")
+                    for path, content in attempt_before.items()}
+        def repair_file_changed() -> bool:
+            # 返修首次写入后立即把控制权交回程序复跑原失败验证。
+            return any(path.is_file() and attempt_before.get(path) != path.read_bytes()
+                       for path in product_files(root))
+
         model_tool_loop(db, task, run, instructions, product,
                         {**base_context, "repair_feedback": repair_feedback}, tools,
-                        stop_when=stop_when, tool_schemas=repair_tools)
+                        stop_when=repair_file_changed if is_repair else stop_when,
+                        tool_schemas=repair_tools,
+                        max_calls=2 if is_repair else None)
         missing = missing_product_files(root)
         if missing:
             raise RuntimeError(f"implementation_files_missing:{','.join(missing)}")
@@ -1632,20 +1904,19 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
                   for path in product_files(root)}
         repair_feedback = {**(repair_feedback or {}),
             "attempt": repair_attempt,
-            "message": "你已结束本轮返修，但实际产品文件均未产生内容变化。模型文本中的已修改声明不算修改。请根据失败报告重新诊断，并通过 write 实际修改相关文件。",
+            "message": "本轮返修未产生实际文件变化。相同失败证据禁止再次调用模型。",
             "failure_source_step": failure_source,
             "latest_failure_report": latest_failure_report,
             "unchanged_file_sha256": hashes,
         }
         safe_record_trace(db, task, run, "repair_no_change", "failed", "返修未产生文件变化",
-                          f"第 {repair_attempt} 次无变化，反馈模型重试",
+                          f"第 {repair_attempt} 次无变化，事务式返修停止",
                           repair_feedback,
                           {"attempt": repair_attempt, "failure_source_step": failure_source})
         db.commit()
-        if repair_attempt == max_attempts:
-            if "validation_result" in repair_feedback:
-                raise RuntimeError("repair_made_no_changes:latest_validation_failed")
-            raise RuntimeError("repair_made_no_changes")
+        if "validation_result" in repair_feedback:
+            raise RuntimeError("repair_made_no_changes:latest_validation_failed")
+        raise RuntimeError("repair_made_no_changes")
     # 更新实现依据的哈希和来源，便于后续设计变化时识别需要增量修改。
     write_json_atomic(lineage_path, {"dev_design_hash": dev_design_hash,
                                     "design_source": design_source,
@@ -1739,12 +2010,7 @@ def handle_verify(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
                       "真实产品验证", "单元测试与浏览器验证均通过" if passed else "产品验证未通过",
                       {"unit_passed": unit_passed, "browser_passed": browser_passed,
                        "unit": unit.__dict__, "browser": browser.__dict__})
-    report = workspace_for(task) / "evidence" / "verification-report.md"
-    report.write_text("# 验证报告\n\n## JavaScript 单元测试\n\n```json\n" +
-                      json.dumps(unit.__dict__, ensure_ascii=False, indent=2) +
-                      "\n```\n\n## Playwright 浏览器验证\n\n```json\n" +
-                      json.dumps(browser.__dict__, ensure_ascii=False, indent=2) + "\n```\n",
-                      encoding="utf-8")
+    report = write_verification_evidence(task, unit, browser)
     if not passed:
         fail_or_repair(db, task, run, browser.error or browser.output.get("stderr") or "verification_failed")
         return

@@ -75,8 +75,28 @@ with SessionLocal() as db:
         task = db.scalar(select(Task).order_by(Task.id))
         if task is None:
             raise RuntimeError('resume_task_missing')
-        if ('--resume-internal' in sys.argv and task.status in {TaskStatus.waiting_user, TaskStatus.failed}
-                and task.cur_step == Step.develop):
+        if '--reset-current-slice-attempt' in sys.argv:
+            progress_path = Path(task.workspace_path) / 'evidence/slice-progress.json'
+            progress = json.loads(progress_path.read_text())
+            pending = next((entry for entry in progress['slices'] if entry.get('status') != 'passed'), None)
+            if pending is None:
+                raise RuntimeError('resume_pending_slice_missing')
+            pending['status'] = 'planned'
+            pending['attempt'] = 0
+            pending['generation'] = int(pending.get('generation', 0)) + 1
+            pending.pop('test', None)
+            pending.pop('report', None)
+            progress_path.write_text(json.dumps(progress, ensure_ascii=False, indent=2) + '\n')
+            print('RESET_SLICE_ATTEMPT', pending['card']['id'], flush=True)
+        if ('--resume-internal' in sys.argv and task.status == TaskStatus.failed
+                and task.cur_step in {Step.test, Step.start_product, Step.verify_product}):
+            # 诊断基准修复 Runtime 后，从已保留的集成失败证据重新进入定向返修。
+            task.cur_step = Step.develop
+            task.status = TaskStatus.running
+            task.failure_reason = None
+            db.commit()
+        elif ('--resume-internal' in sys.argv and task.status in {TaskStatus.waiting_user, TaskStatus.failed}
+                and task.cur_step in {Step.architecture_docs, Step.develop}):
             latest_run = db.scalar(select(StepRun).where(StepRun.task_id == task.id).order_by(StepRun.id.desc()))
             task.status = TaskStatus.running
             task.failure_reason = None
@@ -114,6 +134,13 @@ with SessionLocal() as db:
                 else:
                     raise RuntimeError('candidate_review_timeout')
                 db.add(Event(task_id=task.id, type='document_approval', data={'document_type': 'product', 'approved': True, 'document_version': run.attempt}))
+                db.commit()
+                worker.process_pending_event(db)
+            elif task.cur_step == Step.product_docs and '--auto-decide' in sys.argv:
+                # 用户已授权测试代理决定非关键界面细节，避免把布局选择升级为人工阻塞。
+                answer = ('采用同一页面内的模块切换；工作台点击任务后切换到内容任务模块的编辑视图。'
+                          '布局保持简单，不新增弹窗或独立页面。')
+                db.add(Event(task_id=task.id, type='user_message', data={'content': answer}))
                 db.commit()
                 worker.process_pending_event(db)
             else:
