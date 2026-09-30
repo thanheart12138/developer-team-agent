@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     kimi_base_url: str = "https://api.kimi.com/coding/v1"
     kimi_model: str = "kimi-for-coding"
     kimi_max_completion_tokens: int = 8192
+    openrouter_api_key: str = ""
+    openrouter_api_key_file: Path = Path("secrets/openrouter_api_key")
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "openai/gpt-6-luna"
     worker_poll_seconds: float = 1.0
     frontend_origin: str = "http://127.0.0.1:5173"
 
@@ -43,3 +47,8 @@ def get_deepseek_api_key() -> str:
 def get_kimi_api_key() -> str:
     # 取得 Kimi 的 API 密钥。
     return _get_api_key(settings.kimi_api_key, settings.kimi_api_key_file)
+
+
+def get_openrouter_api_key() -> str:
+    # 取得 OpenRouter 的受控 API 密钥。
+    return _get_api_key(settings.openrouter_api_key, settings.openrouter_api_key_file)

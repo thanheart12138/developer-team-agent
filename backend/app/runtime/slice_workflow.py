@@ -13,10 +13,40 @@ from .prompt_registry import load_prompt
 from .tools import TOOL_SCHEMAS, ToolRuntime
 from .tracing import safe_record_trace
 from .unit_workflow import RUN_UNIT_TESTS_SCHEMA, SUBMIT_UNIT_SCHEMA, UnitTools, file_hashes, test_passed
+from .scaffold_workflow import remaining_todo_files
 
 
 MAX_SLICES = 12
 SLICE_ID = re.compile(r"^[a-z][a-z0-9-]{1,48}$")
+CONTROL_SIGNAL = re.compile(r"(?:^|\n)(REPLAN|BLOCKED):\s*(.+)", re.DOTALL)
+REQUEST_REPLAN_SCHEMA = {"type": "function", "function": {
+    "name": "request_slice_replan",
+    "description": "当前卡缺少未实现模块的公共接口或文件范围时，立即请求 Planner 扩大或调整同一业务切片。",
+    "parameters": {"type": "object", "properties": {
+        "reason": {"type": "string", "maxLength": 1000},
+    }, "required": ["reason"], "additionalProperties": False},
+}}
+
+
+class SliceTools(UnitTools):
+    """在单元文件工具之外提供可立即终止循环的结构化重规划信号。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.replan_reason: str | None = None
+
+    def _request_slice_replan(self, reason: str) -> dict:
+        """记录重规划原因，交给 Runtime 调用 Planner，不修改产品文件。"""
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("slice_replan_reason_required")
+        self.replan_reason = reason.strip()
+        return {"replan": True, "reason": self.replan_reason}
+
+    def execute(self, call: ToolCall) -> ToolResult:
+        """允许当前切片使用结构化重规划工具，其余权限继续沿用 UnitTools。"""
+        if call.tool_name == "request_slice_replan":
+            return ToolRuntime.execute(self, call)
+        return super().execute(call)
 
 
 def _parse_object(text: str) -> dict:
@@ -27,12 +57,53 @@ def _parse_object(text: str) -> dict:
     return value
 
 
+def _control_signal(text: str) -> tuple[str | None, str]:
+    """从独立行提取开发控制信号，容忍模型在信号前给出分析。"""
+    match = CONTROL_SIGNAL.search(text.strip())
+    return (match.group(1), match.group(2).strip()) if match else (None, text.strip())
+
+
+def _slice_history_key(prefix: str, card_id: str, attempt: int, generation: int = 0) -> str:
+    """为显式重试生成新历史，同时保持首次执行的既有键格式。"""
+    suffix = f":g{generation}" if generation else ""
+    return f"{prefix}:{card_id}{suffix}:{attempt}"
+
+
 def _string_list(value, name: str, allow_empty: bool = False) -> list[str]:
     """校验非空字符串列表，避免不可执行的空卡片。"""
     if not isinstance(value, list) or (not allow_empty and not value):
         raise ValueError(f"slice_{name}_required")
     if any(not isinstance(item, str) or not item.strip() for item in value):
         raise ValueError(f"slice_{name}_invalid")
+    return value
+
+
+def _interface_coverage(interfaces: list[str]) -> set[str]:
+    """把组合接口展开成操作名，用于比较验收映射是否覆盖所需接口。"""
+    coverage: set[str] = set()
+    for interface in interfaces:
+        operations = re.findall(r"(?<![\w.])([A-Za-z_]\w*)\s*\(", interface)
+        coverage.update(operations or [interface])
+    return coverage
+
+
+def _validate_coverage_summary(value) -> list:
+    """校验完成报告，接受逐项需求及一个或多个已通过切片的来源。"""
+    if not isinstance(value, list) or not value:
+        raise ValueError("slice_coverage_summary_invalid")
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            continue
+        if not isinstance(item, dict):
+            raise ValueError("slice_coverage_summary_invalid")
+        requirement = item.get("requirement") or item.get("acceptance")
+        sources = item.get("covered_by")
+        if (isinstance(requirement, str) and requirement.strip()
+                and ((isinstance(sources, str) and sources.strip())
+                     or (isinstance(sources, list) and sources
+                         and all(isinstance(source, str) and source.strip() for source in sources)))):
+            continue
+        raise ValueError("slice_coverage_summary_invalid")
     return value
 
 
@@ -47,6 +118,26 @@ def validate_card(card: dict, completed_ids: set[str]) -> dict:
             raise ValueError(f"slice_{field}_required")
     for field in ("owners", "interfaces", "acceptance"):
         _string_list(card.get(field), field, allow_empty=field == "interfaces")
+    required_interfaces = _string_list(card.get("required_interfaces"), "required_interfaces", allow_empty=True)
+    mappings = card.get("acceptance_interfaces")
+    if not isinstance(mappings, list) or len(mappings) != len(card["acceptance"]):
+        raise ValueError("slice_acceptance_interfaces_required")
+    mapped_criteria: set[str] = set()
+    mapped_interfaces: set[str] = set()
+    for mapping in mappings:
+        if not isinstance(mapping, dict) or mapping.get("acceptance") not in card["acceptance"]:
+            raise ValueError("slice_acceptance_interface_invalid")
+        if mapping["acceptance"] in mapped_criteria:
+            raise ValueError("slice_acceptance_interface_duplicate")
+        mapped_criteria.add(mapping["acceptance"])
+        mapped_interfaces.update(_string_list(mapping.get("interfaces"), "acceptance_interface", allow_empty=True))
+    if mapped_criteria != set(card["acceptance"]):
+        raise ValueError("slice_acceptance_interface_coverage")
+    required_coverage = _interface_coverage(required_interfaces)
+    mapped_coverage = _interface_coverage(list(mapped_interfaces))
+    declared_coverage = _interface_coverage(card["interfaces"])
+    if mapped_coverage != required_coverage or not mapped_coverage <= declared_coverage:
+        raise ValueError("slice_required_interfaces_mismatch")
     implementation = _string_list(card.get("implementation_files"), "implementation_files")
     tests = _string_list(card.get("test_files"), "test_files")
     paths = implementation + tests
@@ -62,6 +153,57 @@ def validate_card(card: dict, completed_ids: set[str]) -> dict:
     if any(word in card["id"].lower() for word in forbidden):
         raise ValueError("slice_non_business_id")
     return card
+
+
+def validate_card_dependencies(card: dict, scaffold: dict | None, completed: list[dict]) -> None:
+    """拒绝依赖尚未交付模块却未把其实现和测试纳入当前卡的计划。"""
+    if not scaffold:
+        return
+    modules = {module["id"]: module for module in scaffold.get("modules", [])}
+    exact_owners: dict[str, set[str]] = {}
+    operation_owners: dict[str, set[str]] = {}
+    for module_id, module in modules.items():
+        for interface in module.get("interfaces", []):
+            exact_owners.setdefault(interface, set()).add(module_id)
+            # 一个契约可以合并列出多个公共操作，例如
+            # `listTopics() / getTopic(id)`；每个操作都应能被依赖卡单独引用。
+            for operation in re.findall(r"(?<![\w.])([A-Za-z_]\w*)\s*\(", interface):
+                operation_owners.setdefault(operation, set()).add(module_id)
+    delivered_modules = {module_id for module_id, module in modules.items()
+                         if any(set(module.get("implementation_files", [])) <= set(entry["card"]["implementation_files"])
+                                and module.get("test_file") in entry["card"]["test_files"]
+                                for entry in completed)}
+    current_files = set(card["implementation_files"])
+    current_tests = set(card["test_files"])
+    unavailable = []
+    for interface in card["required_interfaces"]:
+        candidates = exact_owners.get(interface)
+        if candidates is None:
+            candidates = operation_owners.get(interface.split("(", 1)[0])
+        if not candidates:
+            raise ValueError(f"slice_required_interface_unknown:{interface}")
+        if len(candidates) != 1:
+            scoped_candidates = {module_id for module_id in candidates
+                                 if set(modules[module_id].get("implementation_files", [])) <= current_files
+                                 and modules[module_id].get("test_file") in current_tests}
+            current_candidates = candidates.intersection(card["owners"])
+            delivered_candidates = candidates.intersection(delivered_modules)
+            if len(scoped_candidates) == 1:
+                candidates = scoped_candidates
+            elif len(current_candidates) == 1:
+                candidates = current_candidates
+            elif not current_candidates and len(delivered_candidates) == 1:
+                candidates = delivered_candidates
+            else:
+                raise ValueError(f"slice_required_interface_ambiguous:{interface}")
+        owner = next(iter(candidates))
+        module = modules[owner]
+        included = (set(module.get("implementation_files", [])) <= current_files
+                    and module.get("test_file") in current_tests and owner in card["owners"])
+        if owner not in delivered_modules and not included:
+            unavailable.append(interface)
+    if unavailable:
+        raise ValueError("slice_required_interfaces_unavailable:" + ",".join(unavailable))
 
 
 def ensure_delivery_plan(db, task, run, tools) -> None:
@@ -81,6 +223,23 @@ def ensure_delivery_plan(db, task, run, tools) -> None:
     safe_record_trace(db, task, run, "transition_decision", "succeeded", "逐业务切片入口",
                       "不预生成完整开发单元", payload)
     db.commit()
+
+
+def prepare_architecture_delivery(db, task, run, tools) -> None:
+    """架构正式化后先生成受限代码骨架，再创建逐切片交付入口。"""
+    from . import worker as w
+    from .acceptance_standard import ensure_standard
+    from .scaffold_workflow import ensure_scaffold
+    root = w.workspace_for(task)
+    # 只为已正式批准产品且尚未创建交付入口的新架构建立标准；旧修订任务不迁移。
+    if ((run.attempt == 1 or not (root / "docs/architecture-v1.md").is_file())
+            and (root / "docs/product-v1.md").is_file()
+            and not any((root / path).is_file() for path in
+                        ("docs/delivery-plan.json", "docs/development-plan.json"))):
+        ensure_standard(db, task, run, tools)
+    if run.attempt == 1 and not any((root / "product").rglob("*")):
+        ensure_scaffold(db, task, run, tools)
+    ensure_delivery_plan(db, task, run, tools)
 
 
 def load_delivery_plan(root: Path) -> dict:
@@ -117,7 +276,9 @@ def plan_next_slice(db, task, run, tools, plan: dict, progress: dict,
                     blocker: str | None = None, current_card: dict | None = None) -> dict | None:
     """依据真实已通过切片和当前文件规划下一片，或等待真正的业务澄清。"""
     from . import worker as w
+    from .acceptance_standard import load_standard, review_coverage, validate_card_ids
     root = w.workspace_for(task)
+    standard = load_standard(root)
     completed = [entry for entry in progress["slices"] if entry.get("status") == "passed"]
     if len(completed) >= MAX_SLICES:
         raise RuntimeError("slice_limit_exceeded")
@@ -130,20 +291,32 @@ def plan_next_slice(db, task, run, tools, plan: dict, progress: dict,
         "passed_slices": [{"card": entry["card"], "test": entry.get("test")} for entry in completed],
         "current_product_manifest": manifest,
         "missing_product_entries": w.missing_product_files(root),
+        "scaffold_contract": (json.loads((root / "docs/scaffold-contract.json").read_text(encoding="utf-8"))
+                              if (root / "docs/scaffold-contract.json").is_file() else None),
+        "remaining_todo_files": remaining_todo_files(root),
         "latest_test_result": completed[-1].get("test") if completed else None,
         "replan_blocker": blocker,
         "current_card": current_card,
+        "acceptance_standard": standard["items"] if standard else None,
     }
     feedback = None
+    replan_suffix = (f":replan:{hashlib.sha256(blocker.encode('utf-8')).hexdigest()[:12]}"
+                     if blocker else "")
     for attempt in range(3):
         response = w.model_tool_loop(db, task, run, load_prompt("slice-planner"),
             "选择当前下一张业务切片。", {**context, "validation_feedback": feedback}, tools,
-            tool_schemas=[], history_key=f"slice-plan:{len(completed) + 1}:{attempt + 1}")
+            tool_schemas=[], history_key=f"slice-plan:{len(completed) + 1}:{attempt + 1}{replan_suffix}")
         try:
             decision = _parse_object(response)
             action = decision.get("action")
             if action == "implement":
                 card = validate_card(decision.get("card"), {entry["card"]["id"] for entry in completed})
+                if standard:
+                    validate_card_ids(card, standard)
+                validate_card_dependencies(card, context["scaffold_contract"], completed)
+                remaining = set(remaining_todo_files(root))
+                if remaining and not remaining.intersection(card["test_files"]):
+                    raise ValueError("slice_card_ignores_scaffold_todos")
                 if current_card and card["id"] != current_card["id"]:
                     raise ValueError("slice_replan_id_changed")
                 return {"action": action, "card": card}
@@ -156,14 +329,24 @@ def plan_next_slice(db, task, run, tools, plan: dict, progress: dict,
             if action == "clarify":
                 raise ValueError("slice_internal_validation_cannot_clarify")
             if action == "complete":
-                _string_list(decision.get("coverage_summary"), "coverage_summary")
+                _validate_coverage_summary(decision.get("coverage_summary"))
+                if remaining_todo_files(root):
+                    raise ValueError("slice_complete_scaffold_todos_remaining")
                 missing = w.missing_product_files(root)
                 if missing:
                     raise ValueError("slice_complete_missing_product_entries:" + ",".join(missing))
+                if standard:
+                    coverage = review_coverage(db, task, run, tools, standard, completed)
+                    if not coverage["complete"]:
+                        raise ValueError("slice_acceptance_coverage_missing:" +
+                                         json.dumps(coverage["issues"], ensure_ascii=False))
                 return {"action": action, "coverage_summary": decision["coverage_summary"]}
             raise ValueError("slice_action_invalid")
         except (ValueError, TypeError, KeyError) as exc:
             instruction = "只修正结构错误，返回完整 JSON；这是内部工程校验，不得向用户 clarify。"
+            if str(exc) == "slice_coverage_summary_invalid":
+                instruction += (" coverage_summary 必须是非空数组；每项写非空文字，或写"
+                                " {requirement/acceptance: 非空文字, covered_by: 非空文字或非空文字数组}。")
             if str(exc) == "slice_non_business_id":
                 instruction += (" 不要创建独立测试、文档或浏览器验证切片；系统在切片完成后另有全局浏览器验证。"
                                 "若固定入口文件尚缺，把它们并入完成可运行产品的 app-delivery 业务切片。")
@@ -171,6 +354,17 @@ def plan_next_slice(db, task, run, tools, plan: dict, progress: dict,
                 instruction += (" 当前仍缺少固定交付入口，不能宣布 complete。"
                                 "请创建一张 app-delivery 业务切片补齐 missing_product_entries，"
                                 "并以可运行产品交付为业务目标。")
+            if str(exc) in {"slice_card_ignores_scaffold_todos", "slice_complete_scaffold_todos_remaining"}:
+                instruction += (" 必须优先选择 remaining_todo_files 对应的业务模块，并在该业务切片中把 todo"
+                                " 改成真实断言；仍有 todo 时不得 complete。")
+            if str(exc).startswith("slice_required_interfaces_unavailable:"):
+                instruction += (" 当前卡依赖尚未交付的公共接口。必须把这些接口所属模块的全部骨架实现文件和测试文件"
+                                "加入当前卡，并把所属模块加入 owners；不得把缺口留给 Developer。")
+            if str(exc).startswith(("slice_required_interface_unknown:", "slice_required_interface_ambiguous:",
+                                    "slice_acceptance_interface_",
+                                    "slice_required_interfaces_mismatch")):
+                instruction += (" 按 scaffold_contract 公共接口逐条修正 required_interfaces 和 acceptance_interfaces；"
+                                "每条 acceptance 必须映射其真实需要的全部公共接口。")
             feedback = {"error": str(exc), "instruction": instruction}
     raise RuntimeError("slice_plan_validation_failed")
 
@@ -217,7 +411,9 @@ def handle_design(db, task, run, tools) -> None:
 def handle_develop(db, task, run, tools: ToolRuntime) -> None:
     """实现当前切片并在真实测试通过后再规划下一张切片。"""
     from . import worker as w
+    from .acceptance_standard import load_standard
     root = w.workspace_for(task)
+    standard = load_standard(root)
     plan = load_delivery_plan(root)
     progress = _progress(root, plan)
     while True:
@@ -252,8 +448,9 @@ def handle_develop(db, task, run, tools: ToolRuntime) -> None:
         command = "node --test " + " ".join(shlex.quote(str(Path(path).relative_to("product"))) for path in current_tests)
         feedback = pending.get("test") if pending.get("status") == "failed" else None
         start = int(pending.get("attempt", 0)) + 1
+        generation = int(pending.get("generation", 0))
         for attempt in range(start, w.MAX_NO_CHANGE_CORRECTIONS + 2):
-            scoped = UnitTools(root, card["implementation_files"] + card["test_files"],
+            scoped = SliceTools(root, card["implementation_files"] + card["test_files"],
                                all_scope + [pending["card_path"], "docs/product.md", "docs/architecture.md"],
                                submission_files=card["implementation_files"] + card["test_files"],
                                self_test_files=all_scope, test_files=current_tests)
@@ -264,17 +461,22 @@ def handle_develop(db, task, run, tools: ToolRuntime) -> None:
                     "card": card, "owned_files": card["implementation_files"] + card["test_files"],
                     "unit": {"id": card["id"]}, "unit_file_scope": all_scope,
                     "require_unit_submission": True, "unit_test_feedback": feedback,
+                    "acceptance_standard_items": [item for item in standard["items"]
+                                                  if item["id"] in card.get("acceptance_ids", [])]
+                    if standard else [],
                     "passed_slices": [{"id": entry["card"]["id"], "acceptance": entry["card"]["acceptance"]}
                                       for entry in completed],
                 }, scoped, tool_schemas=[schema for schema in TOOL_SCHEMAS
                                          if schema["function"]["name"] in {"read", "write"}]
-                    + [RUN_UNIT_TESTS_SCHEMA, SUBMIT_UNIT_SCHEMA],
-                stop_when=lambda: scoped.submitted_hashes is not None,
-                history_key=f'slice:{card["id"]}:{attempt}')
-            stripped = response.strip()
-            if stripped.startswith("REPLAN:"):
+                    + [RUN_UNIT_TESTS_SCHEMA, SUBMIT_UNIT_SCHEMA, REQUEST_REPLAN_SCHEMA],
+                stop_when=lambda: scoped.submitted_hashes is not None or scoped.replan_reason is not None,
+                history_key=_slice_history_key("slice", card["id"], attempt, generation))
+            signal, detail = _control_signal(response)
+            if scoped.replan_reason is not None:
+                signal, detail = "REPLAN", scoped.replan_reason
+            if signal == "REPLAN":
                 decision = plan_next_slice(db, task, run, tools, plan, progress,
-                                           stripped.removeprefix("REPLAN:").strip(), card)
+                                           detail, card)
                 if decision is None:
                     return
                 if decision["action"] != "implement":
@@ -282,12 +484,12 @@ def handle_develop(db, task, run, tools: ToolRuntime) -> None:
                 card = decision["card"]
                 pending["card"] = card
                 w.write_json_atomic(root / pending["card_path"], card)
-                pending.update(status="planned", attempt=0)
+                pending.update(status="planned", attempt=0, generation=generation + 1)
                 _save_progress(root, progress)
                 _write_index(root, progress)
                 break
-            if stripped.startswith("BLOCKED:"):
-                question = stripped.removeprefix("BLOCKED:").strip()
+            if signal == "BLOCKED":
+                question = detail
                 if not question:
                     raise ValueError("slice_blocked_question_missing")
                 run.status, task.status, task.cur_step = StepStatus.waiting_user, TaskStatus.waiting_user, Step.dev_design
@@ -298,9 +500,13 @@ def handle_develop(db, task, run, tools: ToolRuntime) -> None:
                 raise RuntimeError("slice_submission_required")
             before = file_hashes(root, all_scope)
             result = w.execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec",
-                {"action": "run", "command": command}), history_key=f'slice_test:{card["id"]}')
+                {"action": "run", "command": command}),
+                history_key=_slice_history_key("slice_test", card["id"], attempt, generation))
             after = file_hashes(root, all_scope)
             passed = test_passed(result, before, after)
+            unresolved = set(remaining_todo_files(root))
+            if unresolved.intersection(card["test_files"]):
+                passed = False
             feedback = {"slice_id": card["id"], "attempt": attempt, "command": command,
                         "expectations": card["acceptance"], "result": result.__dict__,
                         "file_hashes_before": before, "file_hashes_after": after, "passed": passed}
@@ -319,3 +525,76 @@ def handle_develop(db, task, run, tools: ToolRuntime) -> None:
             raise RuntimeError(f'slice_tests_failed:{card["id"]}')
         if pending.get("status") == "planned":
             continue
+
+
+def handle_repair(db, task, run, tools: ToolRuntime) -> None:
+    """把集成失败路由给拥有失败入口的已交付切片，并在提交后立即复跑原验证。"""
+    from . import worker as w
+    from .acceptance_standard import load_standard
+    from .repair_objectives import capture, pending
+    root = w.workspace_for(task)
+    triage = w.active_bug_triage(task)
+    if triage.get("event_id"):
+        capture(root, triage)
+    objectives = pending(task)
+    standard = load_standard(root)
+    progress = _progress(root, load_delivery_plan(root))
+    completed = [entry for entry in progress["slices"] if entry.get("status") == "passed"]
+    report_path = root / "evidence/verification-report.md"
+    verification_failure = report_path.is_file() and bool(task.result_url)
+    owner_path = "product/verify_product.py" if verification_failure else None
+    owner = next((entry for entry in reversed(completed)
+                  if owner_path and owner_path in entry["card"]["implementation_files"]), None)
+    if owner is None:
+        owner = completed[-1] if completed else None
+    if owner is None:
+        raise RuntimeError("slice_repair_owner_missing")
+
+    card = owner["card"]
+    owned_files = card["implementation_files"] + card["test_files"]
+    all_scope = [str(path.relative_to(root)) for path in w.product_files(root)]
+    failure = report_path.read_text(encoding="utf-8") if report_path.is_file() else "集成验证失败"
+    scoped = SliceTools(root, owned_files, all_scope + [owner["card_path"], "docs/product.md", "docs/architecture.md"],
+                        submission_files=owned_files, self_test_files=all_scope,
+                        test_files=card["test_files"])
+    failure_key = hashlib.sha256(failure.encode("utf-8")).hexdigest()[:12]
+    w.model_tool_loop(db, task, run, load_prompt("slice-developer"), json.dumps(card, ensure_ascii=False), {
+        "card": card,
+        "owned_files": owned_files,
+        "unit": {"id": card["id"]},
+        "unit_file_scope": all_scope,
+        "require_unit_submission": True,
+        "acceptance_standard_items": [item for item in standard["items"]
+                                      if item["id"] in card.get("acceptance_ids", [])]
+        if standard else [],
+        "repair_round": task.repair_round,
+        "unresolved_acceptance_objectives": objectives,
+        "unit_test_feedback": {"failure_source": "verify_product" if verification_failure else "test",
+                               "failure_report": failure,
+                               "instruction": "保留并完成原始验收目标；最新失败是当前阻塞，不能替代原始目标。先读取必要文件，补对应操作与断言，修改后测试并提交。"},
+        "passed_slices": [{"id": entry["card"]["id"]} for entry in completed],
+    }, scoped, tool_schemas=[schema for schema in TOOL_SCHEMAS
+                             if schema["function"]["name"] in {"read", "write", "replace"}]
+        + [RUN_UNIT_TESTS_SCHEMA, SUBMIT_UNIT_SCHEMA],
+        stop_when=lambda: scoped.submitted_hashes is not None,
+        history_key=f"slice-repair:{card['id']}:{failure_key}:{run.last_completed_action_index}")
+    if scoped.submitted_hashes is None:
+        raise RuntimeError("slice_repair_submission_required")
+    if verification_failure:
+        # 返修后的浏览器复验与首次验证共用脚本预检，避免绕过 URL 和脚本错误门禁。
+        result, command = w.run_product_browser_validation(db, task, run, tools)
+    else:
+        command = "node --test"
+        result = w.execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec",
+            {"action": "run", "command": command}), history_key=f"slice-repair-test:{run.id}")
+    passed = (w.browser_validation_passed(result) if verification_failure else
+              result.status == "succeeded" and result.output.get("exit_code") == 0)
+    if not passed:
+        latest = result.output.get("stdout", "") + result.output.get("stderr", "")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("# 最新受控集成验证失败\n\n```text\n" + latest + "\n```\n", encoding="utf-8")
+        # 保留最新失败证据，并在已有返修预算内交回开发阶段。
+        w.fail_or_repair(db, task, run, "slice_repair_validation_failed")
+        return
+    run.output_path = "product/implementation.md"
+    w.finish_step(db, task, run, Step.test)

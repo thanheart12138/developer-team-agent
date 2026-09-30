@@ -374,7 +374,7 @@ FastAPI 不运行事件分发线程，也不寻找对应 Worker。严格单 Work
 
 ## 6．Model Runtime
 
-Model Runtime 实现 DeepSeek 与 Kimi 两个 Provider。Worker 创建 Runtime 时必须传入当前 Step，并按下表路由；不允许因调用失败自动切换 Provider，也不同时调用两个 Provider。`SIMULATOR_MODEL_PROVIDER` 仅保留给脱离正式 Worker 流程的模型探针和调试调用。
+Model Runtime 实现 DeepSeek、Kimi 与 OpenRouter 三个 Provider。Worker 创建 Runtime 时必须传入当前 Step，并按下表路由；OpenRouter 仅供脱离正式 Worker 流程的模型探针和调试调用，由 `SIMULATOR_MODEL_PROVIDER=openrouter` 选择，不改变固定阶段路由，也不同时调用多个 Provider。
 
 | Step | Provider | 默认模型 |
 | --- | --- | --- |
@@ -388,9 +388,11 @@ Model Runtime 实现 DeepSeek 与 Kimi 两个 Provider。Worker 创建 Runtime �
 
 测试、启动或浏览器验证失败后将 Task 退回 `develop`，因此返修调用仍由 DeepSeek 执行。同一个 StepRun 内的 `author_agent`、`reviewer_agent`、多轮问答及工具循环不得改变 Provider。
 
-DeepSeek 默认模型为 `deepseek-flash`，请求地址为 `SIMULATOR_DEEPSEEK_BASE_URL/chat/completions`。Kimi 使用 Kimi Code Key，默认模型为自动升级别名 `kimi-for-coding`，默认端点为 `https://api.kimi.com/coding/v1`，请求地址为 `SIMULATOR_KIMI_BASE_URL/chat/completions`。端点和模型 ID 可通过启动配置覆盖；真实调用前必须先通过 Kimi Code `/models` 核验当前可用模型。两个 Provider 分别读取独立的、被 Git 忽略的密钥文件。认证头不进入 Trace。
+DeepSeek 默认模型为 `deepseek-flash`，请求地址为 `SIMULATOR_DEEPSEEK_BASE_URL/chat/completions`。DeepSeek 使用 `thinking: {type: enabled}`；带工具的多轮请求须保存流式响应的完整 `reasoning_content`，并随对应 assistant 工具调用在后续请求中续传，同一次模型响应的多个工具调用归为一条 assistant 消息。当前执行循环的工具历史不得因摘要投影丢失思考续传所需的原始调用和结果；旧检查点缺失 `reasoning_content` 时只传已有执行证据，不编造思考内容。Kimi 使用 Kimi Code Key，默认模型为自动升级别名 `kimi-for-coding`，默认端点为 `https://api.kimi.com/coding/v1`，请求地址为 `SIMULATOR_KIMI_BASE_URL/chat/completions`。端点和模型 ID 可通过启动配置覆盖；真实调用前必须先通过 Kimi Code `/models` 核验当前可用模型。DeepSeek 与 Kimi 分别读取独立的、被 Git 忽略的密钥文件。认证头不进入 Trace。
 
-两者共享 `ModelRequest`、`ModelResult`、消息历史和工具调用映射。Provider 各自构造请求 payload，禁止把某一 Provider 的专属字段无条件发送给另一 Provider。DeepSeek 传输超时为 60 秒，Kimi 长文档传输超时为 180 秒；Kimi 单次最大输出为 8192 Token，防止无界长响应阻塞持久化。两者仍遵循最多 3 次传输重试。Trace 的模型请求、响应和重试元数据必须包含实际 `provider` 与 `model`。
+OpenRouter 默认模型为 `openai/gpt-6-luna`、推理强度 `medium`，使用 `https://openrouter.ai/api/v1/chat/completions` 的流式 Chat Completions 与现有工具协议。请求体使用 `reasoning: {effort: medium}` 和 `stream_options: {include_usage: true}`，不传 DeepSeek／Kimi 专属字段。密钥从独立的 `SIMULATOR_OPENROUTER_API_KEY_FILE` 指定文件读取，默认 `secrets/openrouter_api_key`，认证头不进入 Trace。OpenRouter 优先读取当前进程的 `https_proxy`／`HTTPS_PROXY` 并显式传给 HTTPX，同时启用 `trust_env=True`；未设置 HTTPS 代理时保持直连且不读取其他环境代理，避免无关 SOCKS 配置要求额外依赖。DeepSeek 与 Kimi 继续使用 `trust_env=False`。未配置密钥时明确报错；真实调用必须设置请求次数与输出上限。
+
+三个 Provider 共享 `ModelRequest`、`ModelResult`、消息历史和工具调用映射。Provider 各自构造请求 payload，禁止把某一 Provider 的专属字段无条件发送给另一 Provider。DeepSeek 与 OpenRouter 传输超时为 60 秒，Kimi 长文档传输超时为 180 秒；Kimi 单次最大输出为 8192 Token，防止无界长响应阻塞持久化。三个 Provider 仍遵循最多 3 次传输重试。Trace 的模型请求、响应和重试元数据必须包含实际 `provider` 与 `model`。
 
 ### 6.1 请求
 
@@ -555,6 +557,8 @@ MySQL 保存运行状态和路径索引，Workspace 保存文档、代码、报�
 
 2026-09-17 用户确认更新：自动工具上下文复用原账本，按当前 StepRun／history_key 聚合每文件最近一次读取和写入，核对当前 SHA-256，明确读取是否完整且版本仍有效；重复操作不累积。最多提供最近更新的 20 个文件状态，省略数单列；原始记录仍可查询。取消最近一批完整 assistant/tool 历史；仅模型当前请求的读取／查询结果作为 current_requested_data 返回，与当前快照相同的读取全文改为快照引用。无摘要或无证据的旧检查点仍保留原交互，不静默丢失信息；账本不可用保持原回退。未解决失败及执行版本继续提供。单元开发另附已完成单元测试（含依赖）的版本状态、当前缺失文件、当前测试状态和交接提示；文件齐备不等于测试通过，程序仍在模型结束后执行测试，不新增自动推进或循环保护规则。此条覆盖此前最近一批完整交互与逐条摘要窗口约定。
 
+2026-09-24 用户确认的开发读取规则（当前有效）：完成任务优先，允许模型按需读取更多不同文件或新行范围；同一开发循环内，文件 SHA-256 未变且读取范围相同、内容已在本次上下文中的 `read` 不再执行，返回短错误和现有内容位置，并要求继续写入、测试或报告真实阻塞。文件变化后允许重新读取；大文件允许读取此前未读的行范围。规则依检查点中的成功读取在恢复后继续生效，不改变文件写入权限、自测／提交门禁或调用预算。真实任务完成度先于 Token 消耗评价，重复读取被拦截不等于任务通过。
+
 逐工具执行后，程序在任务工作区 evidence/tool-summaries.jsonl 原子保存摘要：summary_id、parent_model_call_id、tool_call_id、step_run_id、history_key、sequence、tool_name、description、status、result_summary、evidence_ref。description 是模型通过工具参数提供的操作目的（最多 200 字符，旧调用缺省用工具名），result_summary 由程序依据真实结果生成；不额外调用摘要模型。write 附工作区相对 file_path、operation、hash_algorithm=sha256、before_hash、after_hash、changed、bytes_written；read 附读取哈希和截断标记；exec 附 action、command、退出码、超时、进程信息。run 时记录产品代码文件哈希，成功验证后文件变化标记旧版本结果过期，不将成功执行等同业务修复。
 
 摘要 ID 由阶段执行、父模型调用及工具调用 ID 确定，同一执行补记不会重复追加。完整原始调用及结果保留现有 Trace 和检查点；摘要写入失败不丢工具结果、不重执行操作，下一轮保留未取得摘要的原始交互。旧任务不批量回填，缺摘要的旧检查点保持完整上下文。账本不是恢复检查点，不提供版本回滚，也不声称覆盖 exec/人工写文件；文件历史返回当前哈希和最后记录是否一致。
@@ -594,7 +598,23 @@ MySQL 保存运行状态和路径索引，Workspace 保存文档、代码、报�
 
 旧单份设计任务保留原有 Transition Planner 及版本化修订流程。已有 `development-plan.json` 的任务继续按 9.3.1 恢复，不批量转换。新生成架构从 2026-09-19 起按 9.3.2 使用逐业务切片流程。
 
+### 9.2.1 架构代码骨架（2026-09-19 用户确认）
+
+新架构正式化后、进入 Dev Design 前，程序在同一个 `architecture_docs` StepRun 内调用一次受限 Scaffolder。输入只包含正式需求、正式架构和固定实现约束；输出为结构化 JSON，声明模块 id、公共接口、实现文件、独立测试文件及全部初始文件内容。程序只接受 `product/` 下的规范相对路径，要求每个模块至少一个实现文件和唯一测试文件，并要求固定入口 `index.html`、`verify_product.py`、`implementation.md` 存在。
+
+骨架只建立模块导出、依赖方向、应用启动和页面区域，不实现业务规则。每个模块测试文件用 Node 内置测试框架声明与架构接口对应的 `test.todo`；todo 是明确的未完成账本，骨架结构验证允许存在，但业务切片验证不允许当前测试文件保留 todo／skip。程序保存 `docs/scaffold-contract.json`，绑定产品与架构哈希、模块文件及初始 todo 数量，并执行 HTML 本地引用检查、JavaScript 语法检查和 Node 测试发现。任一文件缺失、引用越界、语法错误、零测试或模块没有 todo 时阻止进入 Dev Design。
+
+骨架 `modules[].implementation_files` 与 `test_file` 必须逐字引用 `files` 的键，均包含 `product/` 前缀。校验失败时返回模块 id、声明路径和不匹配的文件键提示；程序不悄悄改写所有权或放宽文件边界，仍在原有有界纠正次数内让 Scaffolder 重新生成。
+
+Slice Planner 接收骨架契约和剩余 todo，只能选择仍有未完成测试的业务模块或跨模块用户结果。Developer 必须在当前切片内实现业务代码并把对应 todo 改成真实断言；程序除检查进程退出码和测试数量外，还检查本切片测试文件不存在 todo／skip。Planner 只有在骨架 todo 全部清零、固定入口齐全且全部需求有真实测试证据时才能返回 complete。骨架只用于首轮新建且 `product/` 仍为空的任务；已有产品的架构返工保留当前实现并由后续切片增量修改，不覆盖代码。历史任务、已跳过架构任务和旧 `development-plan` 任务不自动转换。
+
 ### 9.3.2 AI 原生逐业务切片闭环（2026-09-19 用户确认）
+
+2026-09-28 内部行为验收标准（用户确认试行）：产品审批界面及正式 `product.md` 不增加测试字段。新逐切片任务在首张卡前，使用正式产品需求生成 `docs/acceptance-standard.json`，条目包含程序分配的稳定 ID、产品原文连续引用、用户动作／条件及可观察结果；提取模型不能据此新增业务规则。程序校验原文引用、字段与产品哈希，独立审查模型对照全文检查漏项、合并项和曲解；内部纠正有界，失败不伪装为已覆盖。产品版本变化使旧标准失效。技术验证手段由后续设计和实现确定，不写回产品文档。
+
+2026-09-28 局部纠错续订（用户确认试行）：首次提取仍对完整正式产品需求做一次独立审查；审查指出问题后保留候选清单，由纠错模型仅返回新增条目和按已有 ID 替换的条目。程序只合并这些改动，未涉及条目的内容与 ID 必须逐字保持，新增条目获新 ID；继续校验全部原文引用、字段、重复项及条目上限。随后独立模型针对前次问题、局部改动和对应产品原文复查，不在纠错轮次重新生成或重新审查整份清单。审查未通过时保存候选与反馈并在总次数上限内继续，耗尽则失败；只有复查通过才保存正式标准并进入切片。此机制仅保证已审查问题的闭合，不能把模型审查解释为用户验收。
+
+Slice Planner 接收内部标准，每张新卡声明所覆盖的条目 ID；Developer 同时接收当前卡对应条目的原文和可观察结果。`complete` 前程序要求所有条目都被已通过切片引用；独立覆盖审查再对照标准、各卡验收与已生成的浏览器脚本，检查用户可见操作是否真的有端到端验证安排。发现缺口时给 Planner 具体反馈继续规划，不能把仓储方法测试作为页面编辑的完成证据。审查本身是模型判断，仍以真实测试结果和用户最终验收为准；不自动迁移已有逐切片任务，不改变数据库 schema 或现有调用预算。
 
 架构阶段只固定模块边界、数据／状态所有者、公共接口、关键跨模块流程及需要用户决定的业务规则，不生成全部开发单元、文件所有权和逐单元 Dev Design。架构正式化后创建 `docs/delivery-plan.json`，绑定需求与架构哈希并声明 `workflow=slice-v1`；不预判切片总数。
 
@@ -692,6 +712,8 @@ Context 第一阶段优化：正式需求在 input 中只传一次，context 用
 
 验证脚本读取命令行传入的当前产品 URL，不自行启动 HTTP 服务或绑定固定端口。返修纠正每轮刷新实际文件内容；受控复验失败后，最新真实输出持续保留，不能被最初失败报告覆盖。最后未写入且此前复验失败时，终止原因保留 `repair_made_no_changes:latest_validation_failed`，具体结果见返修 Trace。
 
+在首次真实浏览器验证及返修后的受控复验前，程序只检查可确定的验证脚本契约错误：脚本自行创建 HTTP 服务、使用 `argparse` 却没有接收位置 URL 且没有直接读取 `sys.argv`，或把 `sorted(实际值)` 与顺序错误的固定字符串列表比较。发现时记录脚本问题与行号，阻止该次浏览器运行，并把明确反馈交给现有有界返修；不据此判定产品实现失败或伪造浏览器通过。浏览器脚本输出 `[skip]`（不区分大小写）时，即使退出码为零也不得通过。其他断言失败仍保留真实输出，由返修根据正式需求核对脚本与产品；程序不猜测任意断言的对错。
+
 1. 使用 Python Playwright 在真实浏览器环境验证加、减、乘、除和异常输入。
 2. 使用 JavaScript 单元测试验证计算逻辑。
 3. 验证通过后生成或更新 README，写入运行方式和访问地址。
@@ -765,4 +787,5 @@ Worker 使用已持久化的 instructions、input、context 和 tools 重新调�
 - 单条命令最长 60 秒，命令输出及单次读取最多保留 100 KB。
 - 生成软件固定为原生 HTML、CSS、JavaScript；不允许模型更换产品技术栈。
 - 自动测试和真实浏览器验证通过后只能进入 `waiting_acceptance`；用户明确验收通过后才能进入 `succeeded`。
+- 2026-09-30 用户确认原始验收目标独立闭合：实现缺陷的原始反馈、分类产生的期望行为与复现例子、当时验证报告保存在 `evidence/repair-objectives.json`，后续验证脚本错误只作为最新阻塞追加，不覆盖原始目标。逐切片和普通返修均接收未闭合目标。浏览器真实执行通过后，独立只读审查逐项核对原始目标与脚本中的实际操作／断言，引用必须逐字存在于实际执行脚本；缺项、审查失败或脚本／产品代码版本变化均不能复用关闭结果。审核与真实成功运行同时成立才记录闭合版本，仍需用户最终验收。未结构化的旧反馈保留原文，不臆造期望和复现；无法从原文核验时审查不得通过。此机制不生成独立回归脚本，语义审查仍可能出错，不声称程序可确定性证明浏览器操作覆盖。
 - Fake 或模型自述不能替代文件检查、命令结果、HTTP 健康检查、Playwright 验证及用户验收。

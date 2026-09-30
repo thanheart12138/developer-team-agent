@@ -19,7 +19,8 @@ from backend.app.runtime.worker import (create_step_run, execute_tool, handle_de
                                         handle_reviewed_doc, model_tool_loop, process_pending_event, process_task,
                                         product_feedback_is_decided, plan_bug_action, product_code_hashes,
                                         bug_verified_ready, parse_transition_decision, active_bug_triage,
-                                        plan_initial_design_action, skipped_design_evidence)
+                                        plan_initial_design_action, skipped_design_evidence,
+                                        verify_script_preflight)
 
 
 def setup_function():
@@ -768,6 +769,7 @@ def test_requirement_change_without_behavior_contract_waits_for_user(tmp_path, m
 def test_reviewed_document_receives_answers_after_product_approval(tmp_path, monkeypatch):
     # 设计门径和作者共享审批后的决定，不能继续使用产品文档中的旧待确认表述。
     monkeypatch.setattr("backend.app.runtime.unit_workflow.ensure_plan", lambda *args: None)
+    monkeypatch.setattr("backend.app.runtime.scaffold_workflow.ensure_scaffold", lambda *args: None)
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "product.md").write_text("优先级待确认。", encoding="utf-8")
@@ -1002,6 +1004,40 @@ def test_model_loop_blocks_third_identical_tool_action(tmp_path, monkeypatch):
         assert guards[0].summary == "repeated_tool_action"
 
 
+def test_model_loop_blocks_second_read_of_unchanged_file(tmp_path, monkeypatch):
+    # 真实工具循环在第二次同范围读取前拦截，并把短反馈交给下一次模型请求。
+    product = tmp_path / 'product'
+    product.mkdir()
+    (product / 'sample.js').write_text('export const value = 1;\n')
+    calls = 0
+
+    def fake_call(runtime, task_id, request):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            assert request.context['current_requested_data'][0]['status'] == 'failed'
+            assert 'read_already_in_context' in request.context['current_requested_data'][0]['error']
+            return ModelResult(request.request_id, calls, 'DONE', [], 'completed')
+        return ModelResult(request.request_id, calls, '', [ToolCall(
+            f'read-{calls}', 'read', {'path':'product/sample.js', 'description':f'attempt {calls}'})], 'tool_calls')
+
+    monkeypatch.setattr('backend.app.runtime.model.ChatCompletionsRuntime.call', fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name='read guard', cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1,
+                      checkpoint_path=str(tmp_path / 'evidence/checkpoint.json'))
+        db.add(run); db.commit()
+
+        context = {'unit_file_scope':['product/sample.js']}
+        assert model_tool_loop(db, task, run, 'work', 'input', context,
+                               ToolRuntime(tmp_path)) == 'DONE'
+        guards = list(db.scalars(select(TraceRecord).where(
+            TraceRecord.task_id == task.id, TraceRecord.type == 'tool_guard')).all())
+        assert len(guards) == 1 and guards[0].summary == 'duplicate_read'
+
+
 def test_repair_loop_blocks_sixth_non_write_action(tmp_path, monkeypatch):
     calls = 0
 
@@ -1032,6 +1068,23 @@ def test_repair_loop_blocks_sixth_non_write_action(tmp_path, monkeypatch):
             TraceRecord.task_id == task.id, TraceRecord.type == "tool_guard"))
         assert guard is not None
         assert guard.summary == "repair_tool_loop_no_write"
+
+
+def test_successful_replace_resets_repair_no_write_guard():
+    """大文件精确替换成功后，应允许继续读取和运行测试。"""
+    from backend.app.runtime.worker import _repair_actions_without_write
+
+    entries = [
+        {"history_key": "repair", "action": {"tool_name": "read"},
+         "result": {"status": "succeeded"}},
+        {"history_key": "repair", "action": {"tool_name": "replace"},
+         "result": {"status": "succeeded"}},
+        {"history_key": "repair", "action": {"tool_name": "run_unit_tests"},
+         "result": {"status": "succeeded"}},
+    ]
+    assert _repair_actions_without_write(entries, "repair") == 1
+    entries[1]["result"]["status"] = "failed"
+    assert _repair_actions_without_write(entries, "repair") == 3
 
 
 def test_product_revision_receives_complete_user_history(tmp_path, monkeypatch):
@@ -1530,7 +1583,9 @@ def test_kimi_provider_is_recorded_in_model_traces(tmp_path, monkeypatch):
         assert all(trace.metadata_json["model"] == "kimi-for-coding" for trace in traces)
 
 
-def test_browser_verification_skip_cannot_pass_acceptance(tmp_path, monkeypatch):
+@pytest.mark.parametrize("skip_marker,stream", [
+    ("[SKIP]", "stdout"), ("[skip]", "stdout"), ("[skip]", "stderr")])
+def test_browser_verification_skip_cannot_pass_acceptance(tmp_path, monkeypatch, skip_marker, stream):
     (tmp_path / "evidence").mkdir()
     (tmp_path / "product").mkdir()
     for name in ("index.html", "verify_product.py", "implementation.md", "product.test.js"):
@@ -1543,7 +1598,8 @@ def test_browser_verification_skip_cannot_pass_acceptance(tmp_path, monkeypatch)
             if call.parameters["command"].startswith("node"):
                 output = {"exit_code": 0, "stdout": "tests passed", "stderr": ""}
             else:
-                output = {"exit_code": 0, "stdout": "[SKIP] 未安装 playwright", "stderr": ""}
+                output = {"exit_code": 0, "stdout": "", "stderr": ""}
+                output[stream] = f"{skip_marker} 未安装 playwright"
             return ToolResult(call.call_id, call.tool_name, "succeeded", output)
 
     monkeypatch.setattr("backend.app.runtime.worker.fail_or_repair",
@@ -1560,7 +1616,133 @@ def test_browser_verification_skip_cannot_pass_acceptance(tmp_path, monkeypatch)
         handle_verify(db, task, run, FakeTools())
 
         assert task.status == TaskStatus.running
-        assert run.error == "verification_failed"
+        assert run.error == (f"{skip_marker} 未安装 playwright" if stream == "stderr"
+                             else "verification_failed")
+
+
+def test_browser_success_cannot_discard_original_acceptance_defect(tmp_path, monkeypatch):
+    """普通验证退出零时，原始缺陷仍未覆盖就必须返回返修。"""
+    from backend.app.runtime import repair_objectives, worker
+    from backend.app.runtime.contracts import ToolResult
+
+    (tmp_path / "product").mkdir()
+    (tmp_path / "product/verify_product.py").write_text("assert page.title() == '素材库'\n")
+    (tmp_path / "evidence").mkdir()
+    repair_objectives.capture(tmp_path, {"event_id": 8, "classification": "implementation_defect",
+        "user_feedback": "已有素材缺少编辑入口", "changes": [
+            {"current_behavior": "缺编辑入口", "expected_behavior": "已有素材可编辑",
+             "acceptance_examples": ["进入素材列表，编辑已有素材并保存"]}]})
+
+    class FakeTools:
+        def execute(self, call):
+            return ToolResult(call.call_id, call.tool_name, "succeeded",
+                              {"exit_code": 0, "stdout": "passed", "stderr": ""})
+
+    monkeypatch.setattr(worker, "check_product_entry", lambda *a: True)
+    monkeypatch.setattr(worker, "run_product_browser_validation", lambda *a:
+        (ToolResult("browser", "exec", "succeeded", {"exit_code": 0}), "browser"))
+    monkeypatch.setattr(worker, "model_tool_loop", lambda *a, **kw: json.dumps({"results": [
+        {"id": "E8-1", "covered": False, "reason": "只检查标题，没有编辑操作"}]}))
+    with SessionLocal() as db:
+        task = Task(task_name="original defect", cur_step=Step.verify_product,
+                    status=TaskStatus.running, workspace_path=str(tmp_path),
+                    result_url="http://127.0.0.1:8000", repair_round=1)
+        db.add(task)
+        db.flush()
+        run = StepRun(task_id=task.id, step=Step.verify_product, status=StepStatus.running, attempt=1)
+        db.add(run)
+        db.commit()
+        worker.handle_verify(db, task, run, FakeTools())
+        assert task.cur_step == Step.develop
+        assert task.status == TaskStatus.running
+        assert task.repair_round == 2
+        assert run.error == "repair_objectives_unresolved"
+        ledger = repair_objectives.load(tmp_path)
+        assert ledger["items"][0]["status"] == "open"
+        assert ledger["blockers"][-1]["reason"] == "repair_objectives_unresolved"
+
+
+def test_browser_success_does_not_close_uncovered_product_behavior(tmp_path, monkeypatch):
+    """真实验证结果即使退出零，内部行为覆盖审查失败仍不得进入待验收。"""
+    import hashlib
+    from backend.app.runtime import worker
+    from backend.app.runtime.contracts import ToolResult
+
+    docs = tmp_path / "docs"
+    product_dir = tmp_path / "product"
+    evidence = tmp_path / "evidence"
+    for folder in (docs, product_dir, evidence):
+        folder.mkdir()
+    product = "用户可以编辑已有素材。"
+    architecture = "素材模块拥有编辑行为。"
+    (docs / "product.md").write_text(product, encoding="utf-8")
+    (docs / "architecture.md").write_text(architecture, encoding="utf-8")
+    (docs / "acceptance-standard.json").write_text(json.dumps({
+        "product_hash": hashlib.sha256(product.encode()).hexdigest(),
+        "items": [{"id": "A001", "source_quote": "编辑已有素材",
+                   "action": "编辑已有素材", "observable_result": "页面显示新内容"}],
+        "review": {"complete": True, "issues": []}}, ensure_ascii=False), encoding="utf-8")
+    plan = {"workflow": "slice-v1", "product_hash": worker.content_hash(product),
+            "architecture_hash": worker.content_hash(architecture), "max_slices": 12}
+    (docs / "delivery-plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    (evidence / "slice-progress.json").write_text(json.dumps({
+        "workflow": "slice-v1", "product_hash": plan["product_hash"],
+        "architecture_hash": plan["architecture_hash"],
+        "slices": [{"status": "passed", "card": {"id": "material-page-edit",
+                     "acceptance_ids": ["A001"], "acceptance": ["页面编辑素材"]}}],
+        "complete": True}), encoding="utf-8")
+    for name in ("index.html", "verify_product.py", "implementation.md", "product.test.js"):
+        (product_dir / name).write_text("ok", encoding="utf-8")
+
+    class FakeTools:
+        def execute(self, call):
+            return ToolResult(call.call_id, call.tool_name, "succeeded",
+                              {"exit_code": 0, "stdout": "passed", "stderr": ""})
+
+    monkeypatch.setattr(worker, "check_product_entry", lambda *args: True)
+    monkeypatch.setattr(worker, "run_product_browser_validation", lambda *args:
+                        (ToolResult("browser", "exec", "succeeded",
+                                    {"exit_code": 0, "stdout": "browser passed", "stderr": ""}), "browser"))
+    monkeypatch.setattr("backend.app.runtime.acceptance_standard.review_coverage",
+                        lambda *args: {"complete": False, "issues": [{"acceptance_id": "A001",
+                                                           "problem": "页面编辑缺失"}]})
+    monkeypatch.setattr(worker, "fail_or_repair",
+                        lambda db, task, run, error: setattr(run, "error", error))
+    with SessionLocal() as db:
+        task = Task(task_name="coverage", cur_step=Step.verify_product, status=TaskStatus.running,
+                    workspace_path=str(tmp_path), result_url="http://127.0.0.1:8000")
+        db.add(task)
+        db.flush()
+        run = StepRun(task_id=task.id, step=Step.verify_product, status=StepStatus.running, attempt=1)
+        db.add(run)
+        db.commit()
+
+        worker.handle_verify(db, task, run, FakeTools())
+        assert task.status == TaskStatus.running
+        assert run.error == "acceptance_coverage_missing"
+
+
+def test_verify_script_preflight_catches_known_script_errors(tmp_path):
+    """在浏览器运行前识别无法接收 URL 和必错的排序断言。"""
+    script = tmp_path / "verify_product.py"
+    script.write_text("import argparse\np = argparse.ArgumentParser()\n"
+                      "p.add_argument('--base-url')\np.parse_args()\n", encoding="utf-8")
+    assert verify_script_preflight(script).startswith("verification_script_positional_url_required:")
+
+    script.write_text("from http.server import ThreadingHTTPServer\n"
+                      "server = ThreadingHTTPServer(('127.0.0.1', 0), None)\n"
+                      "print('pass')\n", encoding="utf-8")
+    assert verify_script_preflight(script) == "verification_script_starts_server:2"
+
+    script.write_text("import argparse\np = argparse.ArgumentParser()\n"
+                      "p.add_argument('url')\np.parse_args()\n"
+                      "assert sorted(actual) == ['选题二', '选题三']\n", encoding="utf-8")
+    assert verify_script_preflight(script).startswith("verification_script_expected_order_invalid:5:")
+
+    script.write_text("import argparse\np = argparse.ArgumentParser()\n"
+                      "p.add_argument('url')\np.parse_args()\n"
+                      "assert sorted(actual) == ['选题三', '选题二']\n", encoding="utf-8")
+    assert verify_script_preflight(script) is None
 
 
 def test_repair_runs_develop_even_when_all_required_files_exist(tmp_path, monkeypatch):

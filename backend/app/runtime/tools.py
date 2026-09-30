@@ -52,13 +52,23 @@ class ToolRuntime:
         except Exception as exc:
             return ToolResult(call.call_id, call.tool_name, "failed", error=str(exc))
 
-    def _read(self, path: str) -> dict:
-        # 读取当前工作区文件并限制返回长度。
+    def _read(self, path: str, start_line: int | None = None, end_line: int | None = None) -> dict:
+        # 读取当前工作区文件；可按行局部读取，并限制返回长度。
         # 所有读写先经过工作区路径校验。
         target = self._safe_path(path)
         encoded = target.read_bytes()
+        if start_line is not None or end_line is not None:
+            if type(start_line) is not int or type(end_line) is not int or start_line < 1 or end_line < start_line:
+                raise ValueError("invalid_line_range")
+            lines = encoded.decode("utf-8").splitlines(keepends=True)
+            selected = "".join(lines[start_line - 1:end_line]).encode()
+            content, truncated = self._limited(selected)
+            return {"path": path, "content": content, "truncated": truncated,
+                    "start_line": start_line, "end_line": min(end_line, len(lines)),
+                    "total_lines": len(lines), "sha256": hashlib.sha256(encoded).hexdigest()}
         content, truncated = self._limited(encoded)
         return {"path": path, "content": content, "truncated": truncated,
+                "total_lines": encoded.count(b"\n") + (not encoded.endswith(b"\n")),
                 "sha256": hashlib.sha256(encoded).hexdigest()}
 
     def _get_file_change_history(self, file_path: str, cursor: int | None = None) -> dict:
@@ -97,6 +107,17 @@ class ToolRuntime:
         if target.read_bytes() != encoded:
             raise OSError("write_verification_failed")
         return {"path": path, "bytes_written": len(encoded)}
+
+    def _replace(self, path: str, old: str, new: str) -> dict:
+        # 只允许唯一精确片段替换，避免大文件返修必须整文件重写。
+        target = self._safe_path(path)
+        content = target.read_text(encoding="utf-8")
+        count = content.count(old)
+        if count != 1:
+            raise ValueError(f"replace_match_count:{count}")
+        updated = content.replace(old, new, 1)
+        result = self._write(path, updated, overwrite=True)
+        return {**result, "replacements": 1}
 
     def _exec(self, action: str, command: str | None = None, process_id: int | None = None) -> dict:
         # 运行命令或管理生成软件的后台进程。
@@ -157,12 +178,19 @@ class ToolRuntime:
 
 
 TOOL_SCHEMAS = [
-    {"type": "function", "function": {"name": "read", "description": "Read a workspace file",
-     "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "read", "description": "Read a workspace file, optionally by an inclusive line range",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"},
+      "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}},
+      "required": ["path"]}}},
     {"type": "function", "function": {"name": "write", "description": "Atomically create or replace a workspace file",
      "parameters": {"type": "object", "properties": {"path": {"type": "string"},
       "content": {"type": "string"}, "overwrite": {"type": "boolean"}},
       "required": ["path", "content", "overwrite"]}}},
+    {"type": "function", "function": {"name": "replace",
+     "description": "Replace one unique exact text fragment in an existing workspace file; use for small edits to large files",
+     "parameters": {"type": "object", "properties": {"path": {"type": "string"},
+      "old": {"type": "string"}, "new": {"type": "string"}},
+      "required": ["path", "old", "new"]}}},
     {"type": "function", "function": {"name": "exec", "description": "Run or manage a process in product directory",
      "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["run", "start", "stop", "status"]},
       "command": {"type": "string"}, "process_id": {"type": "integer"}}, "required": ["action"]}}},

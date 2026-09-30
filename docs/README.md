@@ -19,6 +19,8 @@
 
 新任务工作区使用 `docs/delivery-plan.json` 标识逐业务切片流程，执行卡保存到 `docs/slices/`，根级 `dev-design.md` 只保存切片索引；测试与恢复进度保存到 `evidence/slice-progress.json` 和 `evidence/slices/`。已有逐单元任务仍使用 `docs/dev-design/vN/`、`evidence/units/` 和 `development-progress.json` 恢复；不在项目治理文档目录生成被开发软件文件。
 
+新逐切片任务在首张执行卡前生成内部 `docs/acceptance-standard.json`，绑定已批准产品版本；各卡引用行为 ID，完成审查保存到 `evidence/acceptance-coverage-review.json`。旧任务不自动迁移，正式产品文档不增加技术验证字段。
+
 ## 架构问题记录
 
 `docs/architecture-issues/` 保存用户委托的架构问题过程记录，README.md 作为索引；每个问题采用 `NNN-english-topic.md`，按问题持续追加进展，不为每轮尝试新建问题文件。固定内容为问题与依据、目标、解决过程、方案取舍、测试方法与结果、当前决定与最终状态、证据及局限。可按问题复杂度增减篇幅，不强制增加无用字段。
@@ -27,8 +29,16 @@
 
 ## 评审与证据
 
+- `docs/evidence/repair-objective-preservation-validation-20260930.md`：原始验收目标独立记账、返修输入与关闭门禁；237 项机制回归通过，真实模型修复效果未验证。
+
+- `docs/evidence/deepseek-thinking-checkpoint-20260924.md`：按官方协议开启 DeepSeek thinking 并续传工具轮次思考内容；真实同断点 3 次调用完成测试夹具返修，保留正式服务未重启及全流程未完成的边界。
+- `docs/evidence/luna-medium-checkpoint-20260924.md`：同一 DeepSeek 失败状态用 OpenRouter Luna medium 真实返修；当前切片通过，记录测试夹具修正、覆盖变化和相对 high 的用量。
+- `docs/evidence/luna-direct-checkpoint-20260924.md`：OpenRouter Luna high 真实调用续测 DeepSeek 的 `topics-core` 失败状态；3 次请求完成当前切片，保留共享存储层改动和全流程未完成的限制。
+- `docs/evidence/openrouter-luna-probe-20260924.md`：OpenRouter Luna 直连因地区限制返回 HTTP 403；经环境 HTTPS 代理的真实 Runtime 流式工具调用及解析已通过，正式返修待验证。
 - `docs/evidence/unit-workflow-validation.md`：模块／功能独立设计、程序逐单元测试修复与恢复机制，137 项回归、三十次真实 DeepSeek 部分验证及完整流程未通过的限制。
 - `docs/evidence/slice-workflow-validation.md`：逐业务切片规划、真实测试后再规划、内部重规划边界及旧任务兼容的机制验证。
+- `docs/evidence/acceptance-standard-offline-validation-20260928.md`：内部行为提取、独立覆盖门禁与旧内容工作台编辑缺口的离线复现；真实模型提取与新增 Token 成本未验证。
+- `docs/evidence/architecture-scaffold-validation.md`：架构代码骨架、逐模块 todo 门禁及旧任务兼容验证。
 - `docs/evidence/unit-workflow-300-validation.md`：累计预算提高到 300 次后的续测，实际 40 次；固定设计开发链路通过，自主流程仍因开发计划单元重叠失败。
 - `docs/evidence/current-only-context-validation.md`：去掉自动工具历史及摘要的真实对照、读取全文去重复测与用量；重复读取、完整自主流程未通过及正式策略未切换。
 - `docs/evidence/effective-tool-state-validation.md`：复用账本聚合有效文件状态、142 项回归及真实探针；26 次模型调用，生成验证脚本错误与返修责任澄清、完整交付未通过。

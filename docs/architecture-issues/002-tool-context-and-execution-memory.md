@@ -57,6 +57,8 @@
 
 2026-09-18 已确认并实现 003 的责任诊断及 [004 的显式提交与无进展停止](004-unit-handoff-and-progress-control.md) ，机制验证通过，真实脚本故障夹具出现一次修复成功及一次无进展失败，从零开发也未完成。当前仍未执行不同记忆方案的严格控制变量对照，不能将路由／交接变化后的成本归因于摘要投影。
 
+2026-09-24 用户决定开启 DeepSeek thinking。官方工具协议要求后续带工具请求回传前轮完整 `reasoning_content`；原有效状态投影会丢弃已记账工具轮次，不能直接满足协议。本次保留用户可见的文件状态摘要，同时为 DeepSeek API 单独续传当前执行循环的原始 assistant／tool 轮次及思考；同一次响应的多个工具调用合并到一条 assistant 消息。机制回归 215 项通过，隔离同断点真实 DeepSeek 3 次请求完成测试夹具返修，Node 23 项通过，输入 66,044／输出 3,945 Token。此举增加协议续传上下文，稳定成本收益未知；旧检查点无思考内容不能凭空重建。完整证据见 [DeepSeek thinking 断点实验](../evidence/deepseek-thinking-checkpoint-20260924.md) 。正式 Worker 因运行中任务无法核查而未重启；完整产品交付未验证。
+
 ## 证据与面试陈述边界
 
 - [账本及查询机制](../evidence/tool-summary-validation.md) 、[首批真实测试](../evidence/tool-summary-deepseek-validation.md) 。

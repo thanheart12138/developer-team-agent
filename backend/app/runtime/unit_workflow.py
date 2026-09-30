@@ -22,6 +22,7 @@ SUBMIT_UNIT_SCHEMA = {'type':'function', 'function':{'name':'submit_unit_for_tes
     'parameters':{'type':'object','properties':{'description':{'type':'string','maxLength':200}},'additionalProperties':False}}}
 
 UNIT_DESIGN_MAX_CANDIDATES = 5
+UNIT_READ_PREVIEW_LINES = 200
 
 
 def parse_json(text: str) -> dict:
@@ -341,7 +342,7 @@ class UnitTools(ToolRuntime):
         # 开发只开放受限文件、自测和交接，不开放任意命令执行。
         if call.tool_name in {'submit_unit_for_test', 'run_unit_tests'}:
             return super().execute(call)
-        if call.tool_name not in {'read', 'write', 'get_file_change_history', 'get_model_call_summaries', 'get_tool_execution_detail'}:
+        if call.tool_name not in {'read', 'write', 'replace', 'get_file_change_history', 'get_model_call_summaries', 'get_tool_execution_detail'}:
             return ToolResult(call.call_id, call.tool_name, 'failed', error='unit_tool_not_allowed')
         return super().execute(call)
 
@@ -351,11 +352,24 @@ class UnitTools(ToolRuntime):
             raise ValueError('unit_write_outside_owned_files')
         return super()._write(path, content, overwrite)
 
-    def _read(self, path: str) -> dict:
-        # 读取仅限当前单元、依赖文件和明确提供的设计资料。
+    def _replace(self, path: str, old: str, new: str) -> dict:
+        # 精确替换与整文件写入使用相同的单元所有权边界。
+        if self._safe_path(path) not in self.writable:
+            raise ValueError('unit_write_outside_owned_files')
+        return super()._replace(path, old, new)
+
+    def _read(self, path: str, start_line: int | None = None, end_line: int | None = None) -> dict:
+        # 读取仅限当前单元、依赖文件和明确提供的设计资料；大文件默认只返回预览。
         if self._safe_path(path) not in self.readable:
             raise ValueError('unit_read_outside_scope')
-        return super()._read(path)
+        if start_line is None and end_line is None:
+            total_lines = len(self._safe_path(path).read_text(encoding='utf-8').splitlines())
+            if total_lines > UNIT_READ_PREVIEW_LINES:
+                output = super()._read(path, 1, UNIT_READ_PREVIEW_LINES)
+                output['truncated'] = True
+                output['hint'] = 'large_file_preview_use_start_line_and_end_line'
+                return output
+        return super()._read(path, start_line, end_line)
 
 
 def dependency_units(unit: dict, ordered: list[dict]) -> list[dict]:

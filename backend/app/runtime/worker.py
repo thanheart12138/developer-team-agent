@@ -1,3 +1,4 @@
+import ast
 import json
 import difflib
 import hashlib
@@ -71,6 +72,48 @@ def unit_idle_calls(history: list[dict], versions: dict) -> int:
     return len(batches)
 
 
+def duplicate_read_error(action: ToolCall, history: list[dict], request_context: dict,
+                         tools: ToolRuntime) -> str | None:
+    # 当前内容已随快照提供时，阻止同版本同范围的重复读取，不妨碍新文件或新范围。
+    if action.tool_name != 'read':
+        return None
+    try:
+        path = str(tools._safe_path(action.parameters['path']).relative_to(tools.workspace))
+    except (KeyError, TypeError, ValueError):
+        return None
+    snapshot = request_context.get('current_product_files', {})
+    if path not in snapshot:
+        return None
+    for entry in reversed(history):
+        previous = entry.get('action', {})
+        result = entry.get('result', {})
+        if previous.get('tool_name') != 'read' or result.get('status') != 'succeeded':
+            continue
+        try:
+            previous_path = str(tools._safe_path(previous['parameters']['path']).relative_to(tools.workspace))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if previous_path != path:
+            continue
+        output = result.get('output', {})
+        requested_start, requested_end = action.parameters.get('start_line'), action.parameters.get('end_line')
+        if requested_start is None and requested_end is None:
+            covered = (previous['parameters'].get('start_line') is None and
+                       previous['parameters'].get('end_line') is None)
+        elif type(requested_start) is int and type(requested_end) is int:
+            first = output.get('start_line', 1)
+            last = output.get('end_line', output.get('total_lines') if not output.get('truncated') else None)
+            covered = last is not None and first <= requested_start <= requested_end <= last
+        else:
+            covered = False
+        if not covered:
+            continue
+        prior_hash = output.get('sha256')
+        if prior_hash and hashlib.sha256((tools.workspace / path).read_bytes()).hexdigest() == prior_hash:
+            return f'read_already_in_context:{path}:current_product_files; use the available content to write, test, or report a real blocker'
+    return None
+
+
 def _recent_action_count(entries: list[dict], history_key: str, signature: str) -> int:
     # 统计同一上下文连续重复的工具动作次数。
     count = 0
@@ -94,7 +137,7 @@ def _repair_actions_without_write(entries: list[dict], history_key: str) -> int:
         if entry.get("history_key", "default") != history_key or not entry.get("action"):
             continue
         result = entry.get("result") or {}
-        if entry["action"].get("tool_name") == "write" and result.get("status") == "succeeded":
+        if entry["action"].get("tool_name") in {"write", "replace"} and result.get("status") == "succeeded":
             break
         count += 1
     return count
@@ -501,7 +544,11 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
         if any(schema["function"]["name"] == "get_tool_execution_detail" for schema in schemas):
             tool_instructions += "需要旧操作时用 get_file_change_history 或 get_model_call_summaries，需要原始历史参数/结果时用 get_tool_execution_detail；最新文件内容用 read。"
         request_id = str(uuid.uuid4())
-        request_context = {**build_tool_context(task, run, context, history, history_key), "model_call_id": request_id}
+        request_context = {**build_tool_context(task, run, context, history, history_key),
+                           "model_call_id": request_id}
+        if primary_runtime.provider == "deepseek":
+            # 保留原摘要投影供模型理解文件状态，工具轮次另按 DeepSeek 协议完整续传。
+            request_context["reasoning_tool_history"] = history
         request = ModelRequest(instructions=f"{BASE_INSTRUCTIONS}\n\n{instruction_text}\n\n{tool_instructions}", input=input_text,
                                context=request_context,
                                tools=schemas,
@@ -638,6 +685,17 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                 text_without_submit += 1
                 if text_without_submit > MAX_NO_CHANGE_CORRECTIONS:
                     raise RuntimeError('unit_submission_required')
+                if runtime.provider == "deepseek":
+                    # 强制继续时保留无工具响应的思考，满足下一轮带工具请求的续传要求。
+                    entry = {"history_key": history_key, "model_request_id": result.request_id,
+                             "assistant_content": result.text,
+                             "reasoning_content": result.raw_response.get("reasoning_content", ""),
+                             "result": {"status": "succeeded"}}
+                    entry["unit_versions_before"] = file_hashes(workspace_for(task), context['owned_files'])
+                    entry["unit_versions_after"] = entry["unit_versions_before"]
+                    history.append(entry)
+                    checkpoint_entries.append(entry)
+                    save_checkpoint(run, checkpoint_entries)
                 context = {**context, 'submission_feedback':'必须调用 submit_unit_for_test，普通结束文本不代表提交。'}
                 continue
             return result.text
@@ -645,6 +703,10 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
         for index, action in enumerate(result.actions, start=run.last_completed_action_index + 1):
             entry = {"history_key": history_key, "model_request_id": result.request_id,
                      "action": action.__dict__}
+            if runtime.provider == "deepseek":
+                # 把本轮真实思考与工具调用共同持久化，恢复后按原内容续传。
+                entry["reasoning_content"] = result.raw_response.get("reasoning_content", "")
+                entry["assistant_content"] = result.text or None
             if context.get('require_unit_submission'):
                 entry['unit_versions_before'] = file_hashes(workspace_for(task), context['owned_files'])
             entries = checkpoint_entries + [entry]
@@ -658,13 +720,18 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             # 阻止连续重复动作和返修中无写入循环。
             invalid_submit = (context.get('require_unit_submission') and action.tool_name == 'submit_unit_for_test'
                               and action is not result.actions[-1])
-            if repeated >= MAX_IDENTICAL_TOOL_ACTIONS or repair_without_write or invalid_submit:
+            duplicate_read = duplicate_read_error(action, history, request_context, tools)
+            if repeated >= MAX_IDENTICAL_TOOL_ACTIONS or repair_without_write or invalid_submit or duplicate_read:
                 # 阻止连续重复动作和返修中无写入循环。
-                code = 'submission_must_be_last' if invalid_submit else "repeated_tool_action" if repeated >= MAX_IDENTICAL_TOOL_ACTIONS else "repair_tool_loop_no_write"
+                code = ('submission_must_be_last' if invalid_submit else
+                        'duplicate_read' if duplicate_read else
+                        'repeated_tool_action' if repeated >= MAX_IDENTICAL_TOOL_ACTIONS else
+                        'repair_tool_loop_no_write')
                 safe_record_trace(db, task, run, "tool_guard", "failed", "阻止无效工具循环", code,
                                   {"action": action.__dict__, "reason": code},
                                   {"history_key": history_key, "reason": code})
-                tool_result = execute_tool(db, task, run, tools, action, result.request_id, history_key, code)
+                tool_result = execute_tool(db, task, run, tools, action, result.request_id, history_key,
+                                           duplicate_read or code)
             else:
                 # 受控工具执行后记录调用、结果和文件产物。
                 tool_result = execute_tool(db, task, run, tools, action, result.request_id, history_key)
@@ -701,6 +768,8 @@ def finish_step(db: Session, task: Task, run: StepRun, next_step: Step):
 
 def fail_or_repair(db: Session, task: Task, run: StepRun, reason: str):
     # 按返修预算决定重新进入开发或终止任务。
+    from .repair_objectives import record_blocker
+    record_blocker(task, reason)
     safe_record_trace(db, task, run, "validation", "failed", "验证失败", reason,
                       {"reason": reason, "repair_round": task.repair_round})
     run.status = StepStatus.failed
@@ -768,6 +837,9 @@ def active_bug_triage(task: Task) -> dict:
 
 def bug_verified_ready(db: Session, task: Task) -> bool:
     # 检查同一份代码已经通过测试与浏览器验证，供 finish 门径使用。
+    from .repair_objectives import pending
+    if pending(task):
+        return False
     root = workspace_for(task)
     tested = root / "evidence" / "bug-tested-code-hashes.json"
     verified = root / "evidence" / "bug-verified-code-hashes.json"
@@ -1233,8 +1305,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
         run.input_path = source
         run.output_path = target
         if kind == "architecture":
-            from .slice_workflow import ensure_delivery_plan
-            ensure_delivery_plan(db, task, run, tools)
+            from .slice_workflow import prepare_architecture_delivery
+            prepare_architecture_delivery(db, task, run, tools)
         finish_step(db, task, run, NEXT_STEP[task.cur_step])
         return
 
@@ -1313,8 +1385,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
             run.input_path = source
             run.output_path = formal_version
             if kind == "architecture":
-                from .slice_workflow import ensure_delivery_plan
-                ensure_delivery_plan(db, task, run, tools)
+                from .slice_workflow import prepare_architecture_delivery
+                prepare_architecture_delivery(db, task, run, tools)
             finish_step(db, task, run, NEXT_STEP[task.cur_step])
             return
 
@@ -1371,8 +1443,8 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     run.input_path = source
     run.output_path = formal_version
     if kind == "architecture":
-        from .slice_workflow import ensure_delivery_plan
-        ensure_delivery_plan(db, task, run, tools)
+        from .slice_workflow import prepare_architecture_delivery
+        prepare_architecture_delivery(db, task, run, tools)
     finish_step(db, task, run, NEXT_STEP[task.cur_step])
 
 
@@ -1455,9 +1527,9 @@ def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     # 根据当前设计开发或返修生成软件并核对实现血缘。
     root = workspace_for(task)
     if (root / "docs/delivery-plan.json").is_file():
-        # 新任务在开发阶段形成“规划一片—实现—真实测试—再规划”的闭环。
-        from .slice_workflow import handle_develop as handle_slice_develop
-        handle_slice_develop(db, task, run, tools)
+        # 首次开发逐片闭环；集成失败则按文件所有权回到对应切片定向返修。
+        from .slice_workflow import handle_develop as handle_slice_develop, handle_repair as handle_slice_repair
+        (handle_slice_repair if task.repair_round > 0 else handle_slice_develop)(db, task, run, tools)
         return
     if (root / "docs/development-plan.json").is_file():
         # 新计划串行执行模块／功能测试闭环，旧任务保留原开发入口。
@@ -1559,6 +1631,10 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
                     "dev_design_diff": dev_design_diff,
                     "previous_dev_design_hash": lineage.get("dev_design_hash"),
                     "repair_round": task.repair_round}
+    from .repair_objectives import capture, pending
+    if acceptance_triage.get("event_id"):
+        capture(root, acceptance_triage)
+    base_context["unresolved_acceptance_objectives"] = pending(task)
     repair_feedback = None
     # 旧报告无法证明生成时的代码版本，不把当前哈希伪装成历史验证快照。
     failure_evidence_source = {"step_run_id": previous_failed.id if previous_failed else None,
@@ -1596,11 +1672,11 @@ verify_product.py 必须读取命令行第一个参数作为访问地址，直�
             changed = code_changed and test_changed if feature_change else code_changed or test_changed
         if changed and is_repair and failure_source in {Step.test.value, Step.verify_product.value}:
             if failure_source == Step.verify_product.value and task.result_url:
-                command = f"{shlex.quote(sys.executable)} verify_product.py {shlex.quote(task.result_url)}"
+                validation, command = run_product_browser_validation(db, task, run, tools)
             else:
                 command = "node --test"
-            validation = execute_tool(db, task, run, tools, ToolCall(
-                str(uuid.uuid4()), "exec", {"action": "run", "command": command}))
+                validation = execute_tool(db, task, run, tools, ToolCall(
+                    str(uuid.uuid4()), "exec", {"action": "run", "command": command}))
             validation_passed = (validation.status == "succeeded"
                                  and validation.output.get("exit_code") == 0
                                  and "[SKIP]" not in validation.output.get("stdout", ""))
@@ -1721,32 +1797,126 @@ def handle_start(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     finish_step(db, task, run, Step.verify_product)
 
 
+def verify_script_preflight(path: Path) -> str | None:
+    """在浏览器运行前识别可确定的脚本调用契约与错误断言。"""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError as exc:
+        return f"verification_script_syntax_error:{exc.lineno}:{exc.msg}"
+    # 使用 argparse 时必须能接收 Worker 传入的位置 URL；直接读取 sys.argv 的脚本不受此检查限制。
+    nodes = list(ast.walk(tree))
+    parser = next((node for node in nodes if isinstance(node, ast.Call)
+                   and ((isinstance(node.func, ast.Attribute) and node.func.attr == "ArgumentParser")
+                        or (isinstance(node.func, ast.Name) and node.func.id == "ArgumentParser"))), None)
+    arguments = [node for node in nodes if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument"]
+    uses_argv = any(isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                    and node.value.id == "sys" and node.attr == "argv" for node in nodes)
+    # 验证脚本只能访问 Worker 已启动的产品 URL，不能自行开服务绕过传入地址。
+    own_server = next((node for node in nodes if isinstance(node, ast.Call)
+                       and ((isinstance(node.func, ast.Name) and node.func.id in
+                             {"HTTPServer", "ThreadingHTTPServer", "TCPServer"})
+                            or (isinstance(node.func, ast.Attribute) and node.func.attr in
+                                {"HTTPServer", "ThreadingHTTPServer", "TCPServer"}))), None)
+    if own_server:
+        return f"verification_script_starts_server:{own_server.lineno}"
+    if (parser and arguments and not uses_argv
+            and all(node.args and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str) for node in arguments)
+            and not any(not node.args[0].value.startswith("-") for node in arguments)):
+        return f"verification_script_positional_url_required:{parser.lineno}"
+    # sorted(实际值) 不可能等于未排序的固定字符串列表，先反馈脚本错误，避免误修产品。
+    for node in nodes:
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1 or not isinstance(node.ops[0], ast.Eq):
+            continue
+        for actual, expected in ((node.left, node.comparators[0]),
+                                 (node.comparators[0], node.left)):
+            if (not isinstance(actual, ast.Call) or not isinstance(actual.func, ast.Name)
+                    or actual.func.id != "sorted" or len(actual.args) != 1 or actual.keywords
+                    or not isinstance(expected, (ast.List, ast.Tuple))):
+                continue
+            values = [item.value for item in expected.elts
+                      if isinstance(item, ast.Constant) and isinstance(item.value, str)]
+            if len(values) == len(expected.elts) and values != sorted(values):
+                return f"verification_script_expected_order_invalid:{node.lineno}:{values!r}"
+    return None
+
+
+def run_product_browser_validation(db: Session, task: Task, run: StepRun,
+                                   tools: ToolRuntime) -> tuple[ToolResult, str]:
+    """先校验生成脚本的确定性错误，再调用受控 Python 执行真实浏览器验证。"""
+    command = f"{shlex.quote(sys.executable)} verify_product.py {shlex.quote(task.result_url or '')}"
+    issue = verify_script_preflight(workspace_for(task) / "product/verify_product.py")
+    if issue:
+        # 预检失败只说明验证脚本有错，不把尚未执行的浏览器检查记为产品失败。
+        safe_record_trace(db, task, run, "verification_script", "failed", "验证脚本预检失败",
+                          issue, {"path": "product/verify_product.py", "error": issue})
+        return ToolResult(str(uuid.uuid4()), "verify_script_preflight", "failed",
+                          {"exit_code": 1, "stdout": "", "stderr": issue}, issue), command
+    return execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec",
+                       {"action": "run", "command": command})), command
+
+
+def browser_validation_passed(result: ToolResult) -> bool:
+    """只有真实浏览器脚本成功执行且未报告跳过时才允许通过。"""
+    output = result.output.get("stdout", "") + result.output.get("stderr", "")
+    return (result.status == "succeeded" and result.output.get("exit_code") == 0
+            and "[skip]" not in output.lower())
+
+
 def handle_verify(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     # 在真实浏览器中验证生成软件并保存结果。
     if not check_product_entry(db, task, run):
         return
+    # 保存实际验证前的代码版本，原始缺陷不能由另一版本的运行结果关闭。
+    verification_hashes = product_code_hashes(task)
     unit = execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec",
                                  {"action": "run", "command": "node --test"}))
-    python = shlex.quote(sys.executable)
-    browser = execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec",
-                                    {"action": "run", "command": f"{python} verify_product.py {task.result_url}"}))
+    browser, _ = run_product_browser_validation(db, task, run, tools)
     unit_passed = unit.status == "succeeded" and unit.output.get("exit_code") == 0
-    browser_stdout = browser.output.get("stdout", "")
-    browser_passed = (browser.status == "succeeded" and browser.output.get("exit_code") == 0
-                      and "[SKIP]" not in browser_stdout)
+    browser_passed = browser_validation_passed(browser)
     passed = unit_passed and browser_passed
-    safe_record_trace(db, task, run, "validation", "succeeded" if passed else "failed",
-                      "真实产品验证", "单元测试与浏览器验证均通过" if passed else "产品验证未通过",
-                      {"unit_passed": unit_passed, "browser_passed": browser_passed,
-                       "unit": unit.__dict__, "browser": browser.__dict__})
     report = workspace_for(task) / "evidence" / "verification-report.md"
     report.write_text("# 验证报告\n\n## JavaScript 单元测试\n\n```json\n" +
                       json.dumps(unit.__dict__, ensure_ascii=False, indent=2) +
                       "\n```\n\n## Playwright 浏览器验证\n\n```json\n" +
                       json.dumps(browser.__dict__, ensure_ascii=False, indent=2) + "\n```\n",
                       encoding="utf-8")
+    coverage_error = None
+    if passed:
+        from .acceptance_standard import load_standard, review_coverage
+        standard = load_standard(workspace_for(task))
+        if standard:
+            # 浏览器脚本或产品代码在返修中变化后，旧覆盖审查不能再次证明当前版本。
+            coverage_path = workspace_for(task) / "evidence/acceptance-coverage-review.json"
+            old = json.loads(coverage_path.read_text(encoding="utf-8")) if coverage_path.is_file() else {}
+            if (old.get("product_hash") != standard["product_hash"]
+                    or old.get("product_code_hashes") != product_code_hashes(task)
+                    or old.get("review", {}).get("complete") is not True):
+                from .slice_workflow import _progress, load_delivery_plan
+                root = workspace_for(task)
+                progress = _progress(root, load_delivery_plan(root))
+                completed = [entry for entry in progress["slices"] if entry.get("status") == "passed"]
+                coverage = review_coverage(db, task, run, tools, standard, completed)
+                if not coverage["complete"]:
+                    passed = False
+                    coverage_error = "acceptance_coverage_missing"
+    if passed:
+        # 原始验收复现须由实际浏览器脚本验证，普通验证成功不能替代。
+        from .repair_objectives import pending, verify as verify_repair_objectives
+        if pending(task) and verification_hashes != product_code_hashes(task):
+            passed = False
+            coverage_error = "repair_objective_validation_code_changed"
+        elif not verify_repair_objectives(db, task, run, tools, browser):
+            passed = False
+            coverage_error = "repair_objectives_unresolved"
+    safe_record_trace(db, task, run, "validation", "succeeded" if passed else "failed",
+                      "真实产品验证", "单元测试、浏览器与行为覆盖均通过" if passed else "产品验证未通过",
+                      {"unit_passed": unit_passed, "browser_passed": browser_passed,
+                       "coverage_error": coverage_error,
+                       "unit": unit.__dict__, "browser": browser.__dict__})
     if not passed:
-        fail_or_repair(db, task, run, browser.error or browser.output.get("stderr") or "verification_failed")
+        fail_or_repair(db, task, run, coverage_error or browser.error or browser.output.get("stderr") or "verification_failed")
         return
     readme = workspace_for(task) / "product" / "README.md"
     readme.write_text(f"# 生成的软件\n\n访问地址：{task.result_url}\n\n启动命令：`{task.process_command}`\n",
@@ -1844,7 +2014,7 @@ def plan_acceptance_action(db: Session, task: Task, run: StepRun, feedback: str,
         # Planner 不接触工具；所有正式文档和已读取证据在下一轮规划中继续可见。
         response = model_tool_loop(
             db, task, run,
-            """你是已有产品验收反馈的 Next Action Planner。用户描述只是线索；对照实际存在的正式文档、明确保存的设计跳过依据和已调查证据，直接决定下一行动。被跳过的文档不是空白正式设计；若新问题表明必须补设计，可选择对应更新。若要判断代码实现缺陷，先 inspect 相关产品代码；证据不足可继续 inspect 或 clarify。只返回一个 JSON 对象：action、path、reason、evidence、changes、confidence、clarifying_question。action 必须在 allowed_actions 中；inspect 的 path 必须在 remaining_files 中，其他行动的 path 为 null。编号反馈逐条解释，选择所有条目中最早失效的行动。改变或新增产品可见行为选 update_requirement；需求不变但架构决策缺失或冲突选 update_architecture；架构成立但实现细节设计必须补充或冲突选 update_dev_design；正式需求和现有设计或跳过依据均支持期望行为而代码不符才选 modify_code。不能只凭“缺陷”一词认定代码问题，不能把用户描述的现状当期望。update_requirement 的 changes 每项须含 current_behavior、expected_behavior 和非空 acceptance_examples；clarify 须只提出一个具体问题。不得写文件或执行命令。""",
+            """你是已有产品验收反馈的 Next Action Planner。用户描述只是线索；对照实际存在的正式文档、明确保存的设计跳过依据和已调查证据，直接决定下一行动。被跳过的文档不是空白正式设计；若新问题表明必须补设计，可选择对应更新。若要判断代码实现缺陷，先 inspect 相关产品代码；证据不足可继续 inspect 或 clarify。只返回一个 JSON 对象：action、path、reason、evidence、changes、confidence、clarifying_question。inspect 是返回给程序的 JSON 行动，不是真实工具调用；例如 {"action":"inspect","path":"product/app.js","reason":"核对页面操作","evidence":[],"changes":[],"confidence":0.8,"clarifying_question":null}。不要输出 tool_call、tool_calls、Markdown 或代码块。action 必须在 allowed_actions 中；inspect 的 path 必须在 remaining_files 中，其他行动的 path 为 null。编号反馈逐条解释，选择所有条目中最早失效的行动。改变或新增产品可见行为选 update_requirement；需求不变但架构决策缺失或冲突选 update_architecture；架构成立但实现细节设计必须补充或冲突选 update_dev_design；正式需求和现有设计或跳过依据均支持期望行为而代码不符才选 modify_code。不能只凭“缺陷”一词认定代码问题，不能把用户描述的现状当期望。update_requirement 的 changes 每项须含 current_behavior、expected_behavior 和非空 acceptance_examples；clarify 须只提出一个具体问题。不得写文件或执行命令。""",
             feedback, {"approved_documents": approved_documents, "remaining_files": remaining,
                        "skipped_design": skipped_design_evidence(task),
                        "inspected_files": inspected, "allowed_actions": allowed,
@@ -1980,6 +2150,9 @@ def plan_acceptance_feedback(db: Session, task: Task, event: Event, feedback: st
     evidence_path = root / "evidence" / f"acceptance-triage-{event.id}.json"
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 在后续验证覆盖最新报告前独立保存原始验收目标。
+    from .repair_objectives import capture
+    capture(root, result)
     safe_record_trace(db, task, run, "acceptance_plan",
                       "waiting" if target is None else "succeeded", "验收下一行动",
                       f"{result['planner_action']} → {result['target_step'] or 'waiting_user'}",

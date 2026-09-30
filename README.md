@@ -16,7 +16,7 @@
 
 ## 当前实际能力与入口
 
-新任务采用逐业务切片流程：架构只固定模块、数据所有者、公共接口和关键流程；Dev Design 只生成第一张结构化执行卡。开发完成当前切片的实现、自测和程序独立测试后，Planner 才依据真实代码与测试选择下一片；测试、说明和验证文件必须并入业务切片。内部文件与实现顺序可有界重规划，改变需求、数据所有权、公共接口语义或验收仍回用户决定。已有 `development-plan.json` 的任务保留旧逐单元恢复入口。最终全量测试、HTTP、真实浏览器和人工验收门禁不变。工具上下文复用执行账本，按文件合并当前读取／写入与版本状态；原始历史可按需查询。新流程目前通过 Fake 模型与真实 Node 的机制验证，完整真实自主交付仍未验证，证据见 `ROADMAP.md`。
+新任务采用架构骨架加逐业务切片流程：架构固定模块、数据所有者、公共接口和关键流程后，受限 Scaffolder 先生成可加载入口、模块接口、装配关系和逐模块 `test.todo` 骨架；Dev Design 只生成第一张结构化执行卡。开发完成当前切片的实现、自测和程序独立测试，并清除本片 todo 后，Planner 才依据真实代码与测试选择下一片。内部文件与实现顺序可有界重规划，改变需求、数据所有权、公共接口语义或验收仍回用户决定。已有 `development-plan.json` 的任务保留旧逐单元恢复入口。最终全量测试、HTTP、真实浏览器和人工验收门禁不变。工具上下文复用执行账本，按文件合并当前读取／写入与版本状态；原始历史可按需查询。真实素材管理基准仍暴露测试覆盖绑定和 Developer 上下文收敛问题，证据见 `ROADMAP.md`。
 
 v1 最小完整链路已实现。v2 在此基础上增加全过程实时可视化：React 展示完整阶段时间线、动作流和按需加载的原始 Trace；FastAPI 提供 Trace 增量索引与详情接口；Worker 追加记录模型输入输出、工具执行、程序校验、用户事件和状态转换。MySQL 保存结构化索引，每个任务工作区永久保存不可覆盖的完整 Trace。人工验收时用户只需描述问题，系统会对照正式需求与设计自动识别需求变更、架构问题、Dev Design 问题、实现缺陷或信息不足，并返回最早需要修订的阶段。产品上下文把模型问题与用户回答作为不可拆分的问答单元，并记录后续写入文件的路径、哈希和来源轮次。进入架构和 Dev Design 后，由 Transition Planner 对照新旧上游、差异及旧产物决定增量修订、确认复用或等待澄清；开发阶段以 Dev Design 血缘判断是否必须修改现有代码，不再按“文件已存在”直接跳过。
 
@@ -67,6 +67,16 @@ Kimi Code Key 同样使用独立密钥文件：
 notepad secrets\kimi_api_key
 $env:SIMULATOR_KIMI_API_KEY_FILE = "secrets/kimi_api_key"
 ```
+
+OpenRouter 是供独立模型探针使用的可选 Provider。Key 由用户自行保存在独立密钥文件；默认模型为 `openai/gpt-6-luna`，推理强度为 `medium`：
+
+```powershell
+notepad secrets\openrouter_api_key
+$env:SIMULATOR_OPENROUTER_API_KEY_FILE = "secrets/openrouter_api_key"
+$env:SIMULATOR_MODEL_PROVIDER = "openrouter"
+```
+
+`SIMULATOR_MODEL_PROVIDER` 不改变正式 Worker 的阶段路由。OpenRouter Runtime 从启动该进程的 `https_proxy`／`HTTPS_PROXY` 读取 HTTPS 代理；启动前需确认该变量指向可用代理。2026-09-24，经环境代理的真实 Luna 流式请求已返回工具调用并完成解析；Luna 仍未接入正式返修阶段。详见 `ROADMAP.md`。
 
 Worker 按阶段自动路由：需求文档、架构设计和 Dev Design 首选 Kimi Code；开发、测试、启动、浏览器验证及返修使用 DeepSeek。Kimi 调用发生凭据、HTTP、传输或响应协议等技术故障时，同一逻辑调用自动降级到 DeepSeek；业务评审、澄清或校验不通过不会触发降级。Kimi 默认使用 OpenAI 兼容端点 `https://api.kimi.com/coding/v1` 和自动升级别名 `kimi-for-coding`，单次最大输出为 8192 Token；模型 ID 和输出上限可分别用 `SIMULATOR_KIMI_MODEL`、`SIMULATOR_KIMI_MAX_COMPLETION_TOKENS` 覆盖。
 

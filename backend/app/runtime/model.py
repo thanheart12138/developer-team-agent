@@ -1,9 +1,10 @@
 import json
+import os
 
 import httpx
 from sqlalchemy.orm import Session
 
-from ..config import get_deepseek_api_key, get_kimi_api_key, settings
+from ..config import get_deepseek_api_key, get_kimi_api_key, get_openrouter_api_key, settings
 from ..models import Message, Step
 from .contracts import ModelRequest, ModelResult, ToolCall
 
@@ -16,38 +17,66 @@ class ModelProtocolError(RuntimeError):
         self.response_body = response_body
 
 
-def build_messages(request: ModelRequest) -> list[dict]:
+def build_messages(request: ModelRequest, include_reasoning: bool = False) -> list[dict]:
     # 把指令、输入和工具历史组装成模型消息。
     context = dict(request.context)
     # 工具历史单独转换为 assistant/tool 消息，保持调用 ID 配对。
     tool_history = context.pop("tool_history", [])
+    reasoning_history = context.pop("reasoning_tool_history", None)
+    if include_reasoning and reasoning_history is not None:
+        tool_history = reasoning_history
     messages = [
         {"role": "system", "content": request.instructions},
         {"role": "user", "content": json.dumps({"input": request.input, "context": context}, ensure_ascii=False)},
     ]
-    for entry in tool_history:
+    if include_reasoning:
+        # DeepSeek thinking 仅续传有原始思考记录的工具轮次，旧检查点不伪造思考内容。
+        tool_history = [entry for entry in tool_history if "reasoning_content" in entry]
+    index = 0
+    while index < len(tool_history):
+        entry = tool_history[index]
         action = entry.get("action")
         result = entry.get("result")
-        if not action or not result:
+        if include_reasoning and not action and "assistant_content" in entry:
+            # 带工具请求中即使上轮未调用工具，后续继续时也要续传该轮思考。
+            messages.append({"role": "assistant", "content": entry["assistant_content"],
+                             "reasoning_content": entry["reasoning_content"]})
+            index += 1
             continue
-        messages.append({
+        if not action or not result:
+            index += 1
+            continue
+        group = [entry]
+        if include_reasoning and entry.get("model_request_id"):
+            # 同一响应的多个工具调用属于一条 assistant 消息，随后逐项追加工具结果。
+            while index + len(group) < len(tool_history):
+                following = tool_history[index + len(group)]
+                if (following.get("model_request_id") != entry["model_request_id"]
+                        or not following.get("action") or not following.get("result")):
+                    break
+                group.append(following)
+        assistant = {
             "role": "assistant",
-            "content": None,
-            "tool_calls": [{
-                "id": action["call_id"],
-                "type": "function",
-                "function": {"name": action["tool_name"],
-                             "arguments": json.dumps(action["parameters"], ensure_ascii=False)},
-            }],
-        })
-        messages.append({"role": "tool", "tool_call_id": action["call_id"],
-                         "content": json.dumps(result, ensure_ascii=False)})
+            "content": entry.get("assistant_content"),
+            "tool_calls": [{"id": item["action"]["call_id"], "type": "function",
+                            "function": {"name": item["action"]["tool_name"],
+                                         "arguments": json.dumps(item["action"]["parameters"], ensure_ascii=False)}}
+                           for item in group],
+        }
+        if include_reasoning:
+            assistant["reasoning_content"] = entry["reasoning_content"]
+        messages.append(assistant)
+        for item in group:
+            messages.append({"role": "tool", "tool_call_id": item["action"]["call_id"],
+                             "content": json.dumps(item["result"], ensure_ascii=False)})
+        index += len(group)
     return messages
 
 
 class ChatCompletionsRuntime:
     provider: str
     timeout: float = 60
+    trust_env: bool = False
 
     def __init__(self, db: Session):
         # 保存供模型消息写入使用的数据库会话。
@@ -62,6 +91,11 @@ class ChatCompletionsRuntime:
     def base_url(self) -> str:
         # 声明子类需要提供 API 地址。
         raise NotImplementedError
+
+    @property
+    def proxy_url(self) -> str | None:
+        # 默认 Provider 不使用进程环境中的代理。
+        return None
 
     def get_api_key(self) -> str:
         # 声明子类需要提供受控 API 密钥。
@@ -100,16 +134,22 @@ class ChatCompletionsRuntime:
         # 流式传输仅用于实时展示，审计保存合并响应。
         payload["stream"] = True
         text_parts = []
+        reasoning_parts = []
         tools_by_index: dict[int, dict] = {}
         metadata = {}
 
         def merged_response() -> dict:
             # 汇总文本、完整工具参数和响应元信息，不保留原始分片。
-            return {**metadata, "text": "".join(text_parts),
+            return {**metadata, "text": "".join(text_parts), "reasoning_content": "".join(reasoning_parts),
                     "tool_calls": [tools_by_index[index] for index in sorted(tools_by_index)]}
 
         try:
-            with httpx.Client(trust_env=False, timeout=self.timeout) as client:
+            proxy_url = self.proxy_url
+            client_options = {"trust_env": self.trust_env if proxy_url else False, "timeout": self.timeout}
+            # 仅给声明了 HTTPS 代理的 Provider 传入显式代理地址。
+            if proxy_url:
+                client_options["proxy"] = proxy_url
+            with httpx.Client(**client_options) as client:
                 # 认证头只用于传输，不进入审计响应。
                 with client.stream("POST", f"{self.base_url.rstrip('/')}/chat/completions",
                                    headers={"Authorization": f"Bearer {api_key}"}, json=payload) as response:
@@ -133,6 +173,10 @@ class ChatCompletionsRuntime:
                         if choice.get("finish_reason"):
                             metadata["finish_reason"] = choice["finish_reason"]
                         delta = choice.get("delta") or {}
+                        # 思考内容只供 DeepSeek 工具轮次续传，不作为面向用户的实时文本发布。
+                        reasoning = delta.get("reasoning_content") or ""
+                        if reasoning:
+                            reasoning_parts.append(reasoning)
                         content = delta.get("content") or ""
                         if content:
                             text_parts.append(content)
@@ -178,11 +222,11 @@ class DeepSeekRuntime(ChatCompletionsRuntime):
         # 构造 DeepSeek Chat Completions 请求体。
         return {
             "model": self.model_name,
-            "messages": build_messages(request),
+            "messages": build_messages(request, include_reasoning=True),
             "tools": request.tools or None,
             "stream": True,
             "stream_options": {"include_usage": True},
-            "thinking": {"type": "disabled"},
+            "thinking": {"type": "enabled"},
         }
 
 
@@ -216,12 +260,51 @@ class KimiRuntime(ChatCompletionsRuntime):
         }
 
 
+class OpenRouterRuntime(ChatCompletionsRuntime):
+    provider = "openrouter"
+    # 仅 OpenRouter 从当前进程环境读取代理配置。
+    trust_env = True
+
+    @property
+    def proxy_url(self) -> str | None:
+        # 优先使用进程已配置的 HTTPS 代理，避免无关 SOCKS 环境变量影响客户端初始化。
+        return os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
+
+    @property
+    def model_name(self) -> str:
+        # 返回配置的 OpenRouter 模型 ID。
+        return settings.openrouter_model
+
+    @property
+    def base_url(self) -> str:
+        # 返回 OpenRouter 的 API 地址。
+        return settings.openrouter_base_url
+
+    def get_api_key(self) -> str:
+        # 从受控配置读取 OpenRouter 密钥。
+        return get_openrouter_api_key()
+
+    def build_payload(self, request: ModelRequest) -> dict:
+        # 构造 Luna medium 的流式请求，并请求返回真实用量。
+        payload = {
+            "model": self.model_name,
+            "messages": build_messages(request),
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "reasoning": {"effort": "medium"},
+        }
+        # 只有提供工具定义时才发送 tools，避免把空值当成工具列表。
+        if request.tools:
+            payload["tools"] = request.tools
+        return payload
+
+
 KIMI_STEPS = {Step.product_docs, Step.architecture_docs, Step.dev_design}
 
 
 def create_model_runtime(db: Session, step: Step | None = None) -> ChatCompletionsRuntime:
     # 根据阶段或配置选择对应的模型运行时。
-    runtimes = {"deepseek": DeepSeekRuntime, "kimi": KimiRuntime}
+    runtimes = {"deepseek": DeepSeekRuntime, "kimi": KimiRuntime, "openrouter": OpenRouterRuntime}
     # 按固定阶段路由模型，未指定阶段时使用全局配置。
     provider = "kimi" if step in KIMI_STEPS else "deepseek" if step is not None else settings.model_provider.lower()
     runtime_class = runtimes.get(provider)

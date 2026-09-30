@@ -462,6 +462,29 @@ def strict_context(owned):
             'unit_test_feedback':None,'require_unit_submission':True}
 
 
+def test_duplicate_read_blocks_same_version_and_range_but_allows_new_information(tmp_path):
+    # 同版本同范围的第二次读取直接复用上下文；文件变化或新行范围仍可继续读取。
+    tools = ToolRuntime(tmp_path)
+    path = 'product/sample.js'
+    tools.execute(ToolCall('write', 'write', {'path':path, 'content':'one\ntwo\nthree\n', 'overwrite':False}))
+    first = ToolCall('first', 'read', {'path':path, 'start_line':1, 'end_line':2})
+    result = tools.execute(first)
+    history = [{'action':first.__dict__, 'result':result.__dict__}]
+    context = {'current_product_files':{path:(tmp_path / path).read_text()}}
+
+    repeated = ToolCall('again', 'read', {'path':'./' + path, 'start_line':1, 'end_line':2,
+                                           'description':'different wording'})
+    assert 'read_already_in_context' in worker.duplicate_read_error(repeated, history, context, tools)
+    assert 'read_already_in_context' in worker.duplicate_read_error(ToolCall('subset', 'read',
+        {'path':path, 'start_line':2, 'end_line':2}), history, context, tools)
+    assert worker.duplicate_read_error(ToolCall('next', 'read',
+        {'path':path, 'start_line':3, 'end_line':3}), history, context, tools) is None
+    assert worker.duplicate_read_error(repeated, history, {}, tools) is None
+
+    (tmp_path / path).write_text('changed\ntwo\nthree\n')
+    assert worker.duplicate_read_error(repeated, history, context, tools) is None
+
+
 @pytest.mark.parametrize('change', ['implementation', 'test', 'dependency'])
 def test_self_test_pass_expires_when_scope_changes(tmp_path, change):
     # 实现、测试或依赖变化都使自测通过过期，不能借旧通过结果提交。
@@ -808,3 +831,21 @@ def test_old_developing_checkpoint_with_files_requires_new_submission(tmp_path,m
         task.cur_step=Step.develop
         worker.handle_develop(db,task,run,ToolRuntime(tmp_path))
         assert calls[0][0]=='add' and calls[0][1]['require_unit_submission']
+
+
+def test_unit_tools_preview_large_file_and_allow_line_range(tmp_path):
+    path = tmp_path / 'product/large.js'
+    path.parent.mkdir(parents=True)
+    path.write_text(''.join(f'line-{index}\n' for index in range(1, 251)), encoding='utf-8')
+    tools = units.UnitTools(tmp_path, ['product/large.js'], [])
+
+    preview = tools.execute(ToolCall('preview', 'read', {'path':'product/large.js'}))
+    selected = tools.execute(ToolCall('selected', 'read', {
+        'path':'product/large.js', 'start_line':220, 'end_line':225}))
+
+    assert preview.status == 'succeeded'
+    assert preview.output['truncated'] is True
+    assert preview.output['total_lines'] == 250
+    assert preview.output['hint'] == 'large_file_preview_use_start_line_and_end_line'
+    assert 'line-201' not in preview.output['content']
+    assert selected.output['content'] == ''.join(f'line-{index}\n' for index in range(220, 226))
