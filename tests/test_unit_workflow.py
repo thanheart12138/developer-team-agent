@@ -3,6 +3,7 @@
 import copy
 import json
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -68,6 +69,7 @@ def developer(root, fail_first=False, always_fail=False, blocked=False):
     def loop(db, task, run, instructions, input_text, context, tools, **kwargs):
         # 按功能模拟实现，同时保留模型收到的真实失败反馈。
         identifier = context['unit']['id']
+        assert 'replace' in {schema['function']['name'] for schema in kwargs['tool_schemas']}
         calls.append((identifier, copy.deepcopy(context)))
         if blocked:
             return 'BLOCKED: 输入范围需要用户确认。'
@@ -330,7 +332,7 @@ def test_recovery_requires_current_versions(tmp_path, monkeypatch):
 
 
 def test_unit_ownership_and_scoped_snapshot(tmp_path):
-    # 当前单元不能修改依赖，文件快照持续刷新且不携带无关模块全文。
+    # 当前单元不能修改依赖；正文按需读取，版本刷新且不自动携带模块全文。
     plan = plan_fixture(tmp_path)
     tools = units.UnitTools(tmp_path, ['product/square.cjs'], ['product/add.cjs'])
     (tmp_path / 'product/add.cjs').write_text('dependency')
@@ -341,9 +343,14 @@ def test_unit_ownership_and_scoped_snapshot(tmp_path):
         task, run = task_run(db, tmp_path)
         context = {'unit_file_scope':['product/add.cjs', 'product/square.cjs']}
         value = worker.build_tool_context(task, run, context, [], 'unit')
-        assert value['current_product_files'] == {'product/add.cjs':'dependency'}
+        assert 'current_product_files' not in value
+        assert 'dependency' not in json.dumps(value)
+        before = {item['path']:item['sha256'] for item in value['product_file_manifest']}
+        assert tools.execute(ToolCall('read', 'read', {'path':'product/add.cjs'})).output['content'] == 'dependency'
         (tmp_path / 'product/add.cjs').write_text('latest')
-        assert worker.build_tool_context(task, run, context, [], 'unit')['current_product_files']['product/add.cjs'] == 'latest'
+        after = worker.build_tool_context(task, run, context, [], 'unit')
+        assert 'current_product_files' not in after
+        assert before['product/add.cjs'] != next(item['sha256'] for item in after['product_file_manifest'] if item['path'] == 'product/add.cjs')
         assert 'UNRELATED_FULLTEXT' not in json.dumps(value)
 
 
@@ -480,6 +487,8 @@ def test_duplicate_read_blocks_same_version_and_range_but_allows_new_information
     assert worker.duplicate_read_error(ToolCall('next', 'read',
         {'path':path, 'start_line':3, 'end_line':3}), history, context, tools) is None
     assert worker.duplicate_read_error(repeated, history, {}, tools) is None
+    assert worker.duplicate_read_error(repeated, history, {'reasoning_tool_history':history}, tools)
+    assert worker.duplicate_read_error(repeated, history, {'current_requested_data':[result.__dict__]}, tools)
 
     (tmp_path / path).write_text('changed\ntwo\nthree\n')
     assert worker.duplicate_read_error(repeated, history, context, tools) is None
@@ -608,7 +617,7 @@ def test_plain_completion_cannot_replace_submit(tmp_path, monkeypatch):
 
 
 def test_alternating_reads_with_new_descriptions_stop_without_progress(tmp_path, monkeypatch):
-    # 交替读取且描述变化仍是无文件进展，四轮提示、八轮终止。
+    # 前两次新读取算信息进展，之后交替重读仍四轮提示、八轮终止。
     from backend.app.runtime.contracts import ModelResult
     owned=['product/a.cjs','product/b.cjs']; received=[]
     def read_again(runtime,task_id,request):
@@ -626,7 +635,105 @@ def test_alternating_reads_with_new_descriptions_stop_without_progress(tmp_path,
         with pytest.raises(RuntimeError,match='unit_development_no_progress'):
             worker.model_tool_loop(db,task,run,'develop','design',strict_context(owned),scoped,
                 tool_schemas=[units.SUBMIT_UNIT_SCHEMA],stop_when=lambda:scoped.submitted_hashes is not None)
-        assert len(received)==8 and received[4]['unit_no_progress']['instruction']
+        assert len(received)==10 and received[6]['unit_no_progress']['instruction']
+
+
+def test_nine_new_read_ranges_allow_self_test_and_submission(tmp_path, monkeypatch):
+    # 九批必要的新行范围不能触发无进展停止，读取后仍需真实自测和显式提交。
+    from backend.app.runtime.contracts import ModelResult
+    owned=['product/a.cjs','product/a.test.cjs']
+    scoped=units.UnitTools(tmp_path,owned,owned,submission_files=owned,self_test_files=owned,test_files=[owned[1]])
+    scoped._write(owned[0], ''.join(f'// section {i}\n' for i in range(300))+'module.exports=7;\n', False)
+    scoped._write(owned[1], "require('node:test')('value',()=>require('node:assert/strict').equal(require('./a.cjs'),7));", False)
+    calls=[]
+
+    def inspect(runtime, task_id, request):
+        # 按稀疏行范围提供新信息；程序不能把读取当成交付完成。
+        calls.append(copy.deepcopy(request.context))
+        count=len(calls)
+        if count<=9:
+            assert request.context['unit_no_progress']['calls_without_progress']==0
+            first=(count-1)*30+1
+            action=ToolCall(str(count),'read',{'path':owned[0],'start_line':first,'end_line':first+9})
+        elif count==10:
+            action=ToolCall('test','run_unit_tests',{})
+        else:
+            assert request.context['unit_self_test']['passed'] is True
+            action=ToolCall('submit','submit_unit_for_test',{})
+        return ModelResult(request.request_id,count,'',[action],'tool_calls')
+
+    monkeypatch.setattr('backend.app.runtime.model.ChatCompletionsRuntime.call',inspect)
+    with SessionLocal() as db:
+        task,run=task_run(db,tmp_path)
+        worker.model_tool_loop(db,task,run,'develop','design',strict_context(owned),scoped,
+            tool_schemas=[s for s in units.TOOL_SCHEMAS if s['function']['name']=='read']+[units.RUN_UNIT_TESTS_SCHEMA,units.SUBMIT_UNIT_SCHEMA],
+            stop_when=lambda:scoped.submitted_hashes is not None)
+        saved=json.loads(Path(run.checkpoint_path).read_text())
+        assert sum(entry.get('unit_read_information_progress') is True for entry in saved)==9
+        assert worker.unit_idle_calls(saved,units.file_hashes(tmp_path,owned))==2
+    assert len(calls)==11 and scoped.submitted_hashes==units.file_hashes(tmp_path,owned)
+
+
+def test_read_information_progress_rejects_covered_ranges_aliases_and_failures(tmp_path):
+    # 重叠区间合并后已覆盖的读取、路径别名和失败读取不能伪造新信息。
+    tools=ToolRuntime(tmp_path)
+    tools._write('product/a.js',''.join(f'line{i}\n' for i in range(10)),False)
+
+    def entry(identifier, path, first, last):
+        # 使用真实读取结果验证范围依据，不凭模型提供的说明判断进展。
+        call=ToolCall(identifier,'read',{'path':path,'start_line':first,'end_line':last})
+        return {'action':call.__dict__,'result':tools.execute(call).__dict__}
+
+    first=entry('a','product/a.js',1,4)
+    second=entry('b','product/a.js',5,8)
+    assert worker.read_information_progress(first,[],tools) is True
+    assert worker.read_information_progress(second,[first],tools) is True
+    covered=entry('c','product/../product/a.js',2,7)
+    assert worker.read_information_progress(covered,[first,second],tools) is False
+    assert worker.read_information_progress(entry('new','product/a.js',7,10),[first,second],tools) is True
+    failed={'action':first['action'],'result':{'status':'failed','output':{},'error':'blocked'}}
+    assert worker.read_information_progress(failed,[],tools) is False
+    tools._write('product/a.js','changed\n',True)
+    assert worker.read_information_progress(entry('changed','product/a.js',1,1),[first,second],tools) is True
+
+
+def test_explicit_repair_reads_then_tests_and_submits_without_legacy_guard(tmp_path, monkeypatch):
+    # 六次必要读取后可真实自测并提交，旧五动作门禁不能挡住显式交接。
+    from backend.app.runtime.contracts import ModelResult
+    owned = [f'product/module{i}.cjs' for i in range(6)] + ['product/edit.test.cjs']
+    scoped = units.UnitTools(tmp_path, owned, [], submission_files=owned, test_files=[owned[-1]])
+    for path in owned[:-1]:
+        scoped.execute(ToolCall(path, 'write', {'path':path, 'content':'module.exports=1;', 'overwrite':False}))
+    scoped.execute(ToolCall('test', 'write', {'path':owned[-1], 'content':"require('node:test')('value',()=>require('node:assert/strict').equal(require('./module0.cjs'),1));", 'overwrite':False}))
+    calls = 0
+    original_card = {'goal':'旧卡要求 verify_product.py 托管静态服务'}
+
+    def fake_call(runtime, task_id, request):
+        # 模拟模型选择下一步，文件读取、Node 测试和版本交接均执行真实工具。
+        nonlocal calls
+        calls += 1
+        assert request.context['card'] == original_card
+        assert request.context['verification_execution_contract'] == worker.VERIFICATION_EXECUTION_CONTRACT
+        assert 'verification_execution_contract' in request.instructions
+        if calls <= 6:
+            action = ToolCall(str(calls), 'read', {'path':owned[calls-1]})
+        elif calls == 7:
+            assert request.context['current_requested_data'][0]['status'] == 'succeeded'
+            action = ToolCall('self-test', 'run_unit_tests', {})
+        else:
+            assert request.context['unit_self_test']['passed'] is True
+            action = ToolCall('submit', 'submit_unit_for_test', {})
+        return ModelResult(request.request_id, calls, '', [action], 'tool_calls')
+
+    monkeypatch.setattr('backend.app.runtime.model.ChatCompletionsRuntime.call', fake_call)
+    with SessionLocal() as db:
+        task, run = task_run(db, tmp_path)
+        context = {**strict_context(owned), 'repair_round':1, 'card':original_card}
+        worker.model_tool_loop(db, task, run, 'develop', 'design', context, scoped,
+            tool_schemas=[schema for schema in units.TOOL_SCHEMAS if schema['function']['name'] == 'read'] + [units.RUN_UNIT_TESTS_SCHEMA, units.SUBMIT_UNIT_SCHEMA],
+            stop_when=lambda:scoped.submitted_hashes is not None)
+    assert calls == 8
+    assert scoped.submitted_hashes == units.file_hashes(tmp_path, owned)
 
 
 def test_current_passing_self_test_gets_one_submission_turn_at_idle_limit(tmp_path, monkeypatch):

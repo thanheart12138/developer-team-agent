@@ -1,0 +1,181 @@
+{
+  "recorded_at": "2026-10-03T08:55:34.703499+00:00",
+  "scope": "Restore formal MySQL/API/frontend/idle Worker; no new model repair or events.",
+  "model_http_calls": 0,
+  "model_tokens": 0,
+  "old_isolated_experiment_final_usage": "unconfirmed",
+  "old_model_budget_reset": false,
+  "formal_counts": {
+    "tasks": 24,
+    "step_runs": 204,
+    "events": 60,
+    "messages": 642,
+    "trace_records": 16908
+  },
+  "historical_formal_counts_match": true,
+  "historical_count_source": "docs/evidence/planner-evidence-reuse-validation-20261003.json",
+  "task_status_counts": {
+    "succeeded": 1,
+    "waiting_user": 10,
+    "failed": 9,
+    "waiting_acceptance": 4
+  },
+  "pending_events": 0,
+  "historical_run_logical_call_count_sum": 486,
+  "per_run_counts_unchanged": true,
+  "file_status_counts": {
+    "checkpoints": {
+      "present": 95,
+      "missing": 109
+    },
+    "traces": {
+      "present": 16908
+    }
+  },
+  "workspace_directory_count": 24,
+  "product_file_count": 60,
+  "unchanged": {
+    "state_sha256": true,
+    "schema_sha256": true,
+    "file_status_sha256": true,
+    "product_hashes_sha256": true
+  },
+  "fingerprints": {
+    "state_sha256": "7a9c11d22e381cd59e747f6fd4db1749cf28c849d13b9bd7fbad49be9af5c779",
+    "schema_sha256": "3bef60776ab1c2102ed00b1cb343090f12823f25790abc9beddbcb409fb700b6",
+    "file_status_sha256": "e66b9bfb6db9df4e5fe735377c077ddc00e231c6aae7f56eb995748c1023c84f",
+    "product_hashes_sha256": "4ce25b339aeffe270f4228c57e3f16404f4de542f916365ffaf037ada206df7c"
+  },
+  "services": {
+    "api": {
+      "service": "api",
+      "pid": 8185,
+      "cwd": "/Users/aideihua/project/ai-agent-product",
+      "command": [
+        "/Users/aideihua/project/ai-agent-product/.venv/bin/python",
+        "-m",
+        "uvicorn",
+        "backend.app.main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8001"
+      ],
+      "started_at": "2026-10-03T08:51:26.365185+00:00"
+    },
+    "frontend": {
+      "service": "frontend",
+      "pid": 8201,
+      "cwd": "/Users/aideihua/project/ai-agent-product/frontend",
+      "command": [
+        "npm",
+        "run",
+        "dev",
+        "--",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
+      "started_at": "2026-10-03T08:51:36.208886+00:00"
+    },
+    "worker": {
+      "service": "worker",
+      "pid": 8243,
+      "cwd": "/Users/aideihua/project/ai-agent-product",
+      "command": [
+        "/Users/aideihua/project/ai-agent-product/.venv/bin/python",
+        "-m",
+        "backend.app.runtime.worker"
+      ],
+      "started_at": "2026-10-03T08:51:48.745253+00:00"
+    }
+  },
+  "frontend_listener_pid": 8222,
+  "urls": {
+    "frontend": "http://127.0.0.1:5173",
+    "api_health": "http://127.0.0.1:8001/health",
+    "existing_task": "http://127.0.0.1:5173/?task=23"
+  },
+  "read_only_service_checks": [
+    "api_health_200",
+    {
+      "task_id": 23,
+      "status": "failed",
+      "cur_step": "develop",
+      "direct_proxy_equal": true
+    },
+    {
+      "task_id": 24,
+      "status": "waiting_acceptance",
+      "cur_step": "verify_product",
+      "direct_proxy_equal": true
+    },
+    {
+      "task_id": 25,
+      "status": "waiting_acceptance",
+      "cur_step": "verify_product",
+      "direct_proxy_equal": true
+    },
+    {
+      "task_id": 26,
+      "status": "failed",
+      "cur_step": "develop",
+      "direct_proxy_equal": true
+    },
+    "missing_task_404_then_existing_task_200",
+    "existing_trace_detail_200",
+    "real_browser_landing_loaded",
+    "real_browser_task_status_and_trace_detail_loaded"
+  ],
+  "browser": {
+    "url": "http://127.0.0.1:5173/?task=23",
+    "page_errors": [],
+    "api_errors": [],
+    "failed_requests": [],
+    "blocked_write_requests": [],
+    "historical_failure_reason_preserved": true,
+    "screenshot": "/Users/aideihua/project/ai-agent-product/workspace/experiments/formal-service-recovery-20261003-4caius6l/frontend-task23.png"
+  },
+  "process_commands_all_zero": true,
+  "preserved_initial_verification_errors": [
+    "Trace relative paths initially resolved against the project instead of each task root.",
+    "Browser script initially rejected the historical failed task error display."
+  ],
+  "application_code_changed": false,
+  "database_schema_changed": false,
+  "task_or_event_mutated": false,
+  "env_file_modified": false,
+  "old_content_platform_restored": false,
+  "generated_product_started_or_validated": false,
+  "user_acceptance_completed": false,
+  "persistent_root": "/Users/aideihua/project/ai-agent-product/workspace/experiments/formal-service-recovery-20261003-4caius6l",
+  "artifact_sha256": {
+    "recover.py": "897e3fea64eb057984ab27bf9f9ecca2a442404ea99c2304329af3a479974610",
+    "verify_services.py": "b174671ae1f165bdf505ad6685cabe5063f48fd3c8d821a40fe841f9f26d3c27",
+    "formal-before.json": "21fe7cf2f9b164244e1cd42ce0e16b7251b2a2c204b92b4bb83c1310d23e4e5e",
+    "formal-before-checked.json": "6452f96f47e32f4661cca035b91a0dfe2211e8a6e2e1c4e20a79572cdfebc99f",
+    "formal-after.json": "86872ed873241cbde77dfbe5973a3f693bde06fd2f2f30ac939bbd12f7622ee0",
+    "verification-first-failure.json": "45a94d8525538eade84baf19aac492fbd0a24c54f53d73efad0ad6f96857d06d",
+    "service-verification.json": "560f4ca2c1da0aba0e033578ca982d1e01223dcdd5df90e0297460139035d6c9",
+    "process-verification.json": "bc84b67ac023103e56dcc7f6d755678cc454edb1d1b9798f3fdca175dc6db5d6",
+    "frontend-task23.png": "7333a6d9bd9d6b8e7f79476eda9448a4d54b701859a9c6ab1a3b1dedc0633211"
+  },
+  "limitations": [
+    "Existing 109 missing checkpoints match the prior count; item-by-item pre-reboot equality is unproven.",
+    "Trace file existence checked; only representative detail JSON was read through the API.",
+    "Formal data recovery does not recover the missing isolated experiment or its final model usage.",
+    "Windows and paid model repair were not tested."
+  ],
+  "final_delivery_checks": {
+    "three_services_alive": true,
+    "api_health": 200,
+    "four_formal_fingerprints_unchanged": true,
+    "two_control_scripts_syntax": "pass",
+    "local_document_links_valid": 105,
+    "machine_json": "valid",
+    "experiment_directory_git_ignored": true,
+    "git_diff_check": "pass"
+  }
+}

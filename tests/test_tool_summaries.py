@@ -12,6 +12,7 @@ from backend.app.runtime.contracts import ModelResult, ToolCall
 from backend.app.runtime.model import build_messages
 from backend.app.runtime.tool_summaries import DETAIL_CHARS, ToolSummaryStore
 from backend.app.runtime.tools import ToolRuntime
+from backend.app.runtime.unit_workflow import UnitTools
 
 
 def setup_function():
@@ -58,6 +59,73 @@ def test_write_history_versions_and_historical_detail(tmp_path):
         assert len(store.load()) == 2
         (tmp_path / 'product/app.js').write_text('outside write')
         assert store.file_history('product/app.js')['matches_last_record'] is False
+
+
+def test_replace_is_current_write_and_failed_replace_keeps_last_success(tmp_path):
+    # 局部替换必须进入修改历史和当前写入投影；替换失败不能伪造新版本。
+    with SessionLocal() as db:
+        task, run, tools = task_run(db, tmp_path)
+        history = [execute(db, task, run, tools, ToolCall('w', 'write', {'path':'product/app.js', 'content':'old', 'overwrite':False}))]
+        history.append(execute(db, task, run, tools, ToolCall('p', 'replace', {'path':'product/app.js', 'old':'old', 'new':'new'}), 'model-b'))
+        store = ToolSummaryStore(tmp_path)
+        latest = store.file_history('product/app.js')['items'][0]
+        assert latest['tool_name'] == 'replace'
+        assert latest['operation'] == 'replace'
+        assert latest['before_hash'] == hashlib.sha256(b'old').hexdigest()
+        assert latest['after_hash'] == hashlib.sha256(b'new').hexdigest()
+        assert store.file_history('product/app.js')['matches_last_record'] is True
+        state = worker.build_tool_context(task, run, {}, history, 'default')['tool_summaries'][0]
+        assert state['latest_write']['tool_call_id'] == 'p'
+        assert state['latest_write']['matches_current_files'] is True
+        failed = execute(db, task, run, tools, ToolCall('bad', 'replace', {'path':'product/app.js', 'old':'absent', 'new':'bad'}), 'model-c')
+        assert failed['result']['status'] == 'failed'
+        assert store.load()[-1]['before_hash'] == hashlib.sha256(b'new').hexdigest()
+        assert store.load()[-1]['after_hash'] is None
+        assert store.file_history('product/app.js')['items'][0]['tool_call_id'] == 'p'
+
+
+def test_failed_self_test_remains_failure_after_later_read_and_retest_clears_it(tmp_path):
+    # 用真实 Node 失败输出复现摘要误报，后续读取不能清除；同一自测成功才闭合。
+    with SessionLocal() as db:
+        task, run, runtime = task_run(db, tmp_path)
+        path = 'product/check.test.cjs'
+        runtime._write(path, "require('node:test')('check',()=>{throw Error('EXPECTED_FAILURE')});", False)
+        tools = UnitTools(tmp_path, [path], [path], submission_files=[path], self_test_files=[path], test_files=[path])
+        history = [execute(db, task, run, tools, ToolCall('test', 'run_unit_tests', {}))]
+        assert history[0]['result']['status'] == 'succeeded'
+        assert history[0]['result']['output']['passed'] is False
+        store = ToolSummaryStore(tmp_path)
+        row = store.load()[-1]
+        assert row['status'] == 'failed'
+        assert row['exit_code'] == 1
+        assert 'EXPECTED_FAILURE' in row['error_excerpt']
+        history.append(execute(db, task, run, tools, ToolCall('read', 'read', {'path':path}), 'model-b'))
+        context = worker.build_tool_context(task, run, {}, history, 'default')
+        assert any(f['summary_id'] == row['summary_id'] for f in context['tool_failures'])
+        runtime._write(path, "require('node:test')('check',()=>{});", True)
+        history.append(execute(db, task, run, tools, ToolCall('retest', 'run_unit_tests', {}), 'model-c'))
+        assert store.load()[-1]['status'] == 'succeeded'
+        assert not worker.build_tool_context(task, run, {}, history, 'default')['tool_failures']
+        runtime._write('product/other.js', 'unrelated', False)
+        context = worker.build_tool_context(task, run, {}, history, 'default')
+        assert context['latest_execution_versions'][-1]['matches_current_files'] is True
+        runtime._write(path, "require('node:test')('changed',()=>{});", True)
+        context = worker.build_tool_context(task, run, {}, history, 'default')
+        assert context['latest_execution_versions'][-1]['matches_current_files'] is False
+
+
+def test_partial_read_summary_does_not_claim_complete_file(tmp_path):
+    # 成功返回一个行区间不等于读取全文件，摘要必须保留实际范围。
+    with SessionLocal() as db:
+        task, run, tools = task_run(db, tmp_path)
+        tools._write('product/a.js', 'first\nsecond\nthird\n', False)
+        history = [execute(db, task, run, tools, ToolCall('partial', 'read', {'path':'product/a.js', 'start_line':1, 'end_line':2}))]
+        state = worker.build_tool_context(task, run, {}, history, 'default')['tool_summaries'][0]['latest_read']
+        assert state['complete'] is False
+        assert (state['start_line'], state['end_line'], state['total_lines']) == (1, 2, 3)
+        history.append(execute(db, task, run, tools, ToolCall('all', 'read', {'path':'product/a.js', 'start_line':1, 'end_line':3}), 'model-b'))
+        state = worker.build_tool_context(task, run, {}, history, 'default')['tool_summaries'][0]['latest_read']
+        assert state['complete'] is True
 
 
 def test_one_model_call_has_multiple_tools_and_system_parent_is_null(tmp_path):

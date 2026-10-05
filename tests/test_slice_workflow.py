@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import pytest
 
 from backend.app.database import Base, SessionLocal, engine
 from backend.app.models import Step, StepRun, StepStatus, Task, TaskStatus
@@ -46,6 +47,51 @@ def card():
         ],
         "reason": "形成第一个端到端业务结果",
     }
+
+
+def test_completed_project_design_repair_creates_event_card(tmp_path, monkeypatch):
+    """旧切片通过后，设计返修仍必须规划新卡并保存原始目标。"""
+    from backend.app.runtime import repair_objectives
+    with SessionLocal() as db:
+        task, run = make_task(db, tmp_path, Step.dev_design)
+        tools = ToolRuntime(tmp_path)
+        slice_workflow.ensure_delivery_plan(db, task, run, tools)
+        plan = slice_workflow.load_delivery_plan(tmp_path)
+        progress = slice_workflow._progress(tmp_path, plan)
+        old = slice_workflow._append_card(tmp_path, progress, card())
+        old["status"] = "passed"
+        progress["complete"] = True
+        slice_workflow._save_progress(tmp_path, progress)
+        triage = {"classification": "dev_design_defect", "planner_action": "update_dev_design",
+                  "event_id": 42, "user_feedback": "favicon 404，刷新页面应无资源错误"}
+        worker.write_json_atomic(tmp_path / "evidence/acceptance-triage-42.json", triage)
+        repair_objectives.capture(tmp_path, triage)
+        repair_objectives.capture(tmp_path, triage)
+        calls = []
+
+        def fake_loop(*args, **kwargs):
+            """先模拟错误宣布完成，再按校验反馈返回真正返修卡。"""
+            context = args[5]
+            calls.append(context)
+            assert context["current_acceptance_feedback"] == triage
+            assert context["pending_repair_objectives"][0]["original_feedback"] == triage["user_feedback"]
+            if len(calls) == 1:
+                return json.dumps({"action": "complete", "coverage_summary": ["旧功能通过"]})
+            assert context["validation_feedback"]["error"] == "slice_design_repair_not_delivered"
+            return json.dumps({"action": "implement", "card": {**card(), "id": "material-resource-repair"}})
+
+        monkeypatch.setattr(worker, "model_tool_loop", fake_loop)
+        slice_workflow.handle_design(db, task, run, tools)
+        saved = slice_workflow._progress(tmp_path, plan)
+        assert len(saved["slices"]) == 2 and saved["slices"][0]["status"] == "passed"
+        assert saved["slices"][1]["repair_event_id"] == 42 and saved["complete"] is False
+        slice_workflow.handle_design(db, task, run, tools)
+        assert len(calls) == 2
+        assert len(repair_objectives.pending(task)) == 1
+        saved["slices"][1]["status"] = "passed"
+        slice_workflow._save_progress(tmp_path, saved)
+        # 执行卡通过不核销目标；核销仍等待真实浏览器与独立审查。
+        assert repair_objectives.pending(task)[0]["status"] == "open"
 
 
 def test_card_rejects_test_or_document_only_slice():
@@ -348,6 +394,7 @@ def test_missing_page_edit_coverage_replans_after_data_update_passed(tmp_path, m
         result = slice_workflow.plan_next_slice(db, task, run, ToolRuntime(tmp_path), plan, progress)
         assert result["card"]["id"] == "material-page-edit"
         assert "A001" in seen[1]["validation_feedback"]["error"]
+        assert seen[1]["verification_execution_contract"] == worker.VERIFICATION_EXECUTION_CONTRACT
 
 
 def test_claimed_edit_id_without_browser_operation_fails_independent_coverage_review(tmp_path, monkeypatch):
@@ -627,8 +674,14 @@ def test_repair_preflight_failure_uses_remaining_repair_budget(tmp_path, monkeyp
     class SubmittedTools:
         def __init__(self, *args, **kwargs):
             self.submitted_hashes = {"product/verify_product.py": "changed"}
+            self.readable = set()
+
+        def _safe_path(self, path):
+            return tmp_path / path
 
     monkeypatch.setattr(slice_workflow, "SliceTools", SubmittedTools)
+    monkeypatch.setattr(slice_workflow, "_repair_diagnostic", lambda *args: {
+        "detail_path": "evidence/diagnostic.json"})
     monkeypatch.setattr(worker, "model_tool_loop", lambda *args, **kwargs: "submitted")
     monkeypatch.setattr(worker, "run_product_browser_validation", lambda *args: (
         ToolResult("preflight", "verify_script_preflight", "failed",
@@ -647,6 +700,243 @@ def test_repair_preflight_failure_uses_remaining_repair_budget(tmp_path, monkeyp
         assert task.repair_round == 2
         assert "verification_script_starts_server:7" in (
             tmp_path / "evidence/verification-report.md").read_text(encoding="utf-8")
+
+
+def test_repair_first_request_has_real_diagnostic_and_preserves_original_failure(tmp_path, monkeypatch):
+    """返修首轮提供当前 Node 错误，保留原集成失败，诊断不代替模型自测。"""
+    selected = {**card(), "implementation_files": ["product/materials.js"],
+                "test_files": ["product/material-create.test.js"]}
+    (tmp_path / "product").mkdir()
+    (tmp_path / "product/materials.js").write_text("module.exports = 0;\n")
+    (tmp_path / "product/material-create.test.js").write_text(
+        "const test=require('node:test'); const assert=require('node:assert/strict');\n"
+        "test('visible material',()=>assert.equal(require('./materials.js'),1));\n")
+    (tmp_path / "evidence").mkdir()
+    (tmp_path / "evidence/verification-report.md").write_text("原页面缺少编辑入口")
+    monkeypatch.setattr(slice_workflow, "load_delivery_plan", lambda root: {})
+    monkeypatch.setattr(slice_workflow, "_progress", lambda root, plan: {"slices": [
+        {"card": selected, "card_path": "docs/card.json", "status": "passed"}]})
+
+    class RequestObserved(Exception):
+        pass
+
+    def first_request(db, task, run, instructions, input_text, context, tools, **kwargs):
+        assert "card" not in context and "acceptance_standard_items" not in context
+        assert context["repair_task"]["card_id"] == selected["id"]
+        reference = context["repair_task"]["original_card_ref"]
+        assert json.loads((tmp_path / reference).read_text()) == selected
+        assert tools.execute(ToolCall("card", "read", {"path": reference})).status == "succeeded"
+        assert tools.execute(ToolCall("alter-card", "write", {
+            "path": reference, "content": "{}", "overwrite": True})).status == "failed"
+        diagnostic = context["unit_diagnostic"]
+        assert diagnostic["passed"] is False and diagnostic["exit_code"] == 1
+        assert "visible material" in diagnostic["failure_report"]
+        assert "ERR_ASSERTION" in diagnostic["failure_report"]
+        assert "material-create.test.js:2" in diagnostic["failure_report"]
+        assert context["unit_test_feedback"]["failure_report"] == "原页面缺少编辑入口"
+        assert tools.self_test is None and tools.submitted_hashes is None
+        assert tools.execute(ToolCall("early", "submit_unit_for_test", {})).error == "unit_self_test_required"
+        assert tools.execute(ToolCall("detail", "read", {"path": diagnostic["detail_path"]})).status == "succeeded"
+        focused = worker.build_tool_context(task, run, context, [], kwargs["history_key"])
+        assert focused["current_task"]["latest_evidence"]["source_ref"] == "unit_diagnostic"
+        assert focused["development_state"]["test_state"] == "failed"
+        assert focused["development_state"]["next_action"] == "repair_current_unit_from_diagnostic"
+        raise RequestObserved
+
+    monkeypatch.setattr(worker, "model_tool_loop", first_request)
+    with SessionLocal() as db:
+        task, run = make_task(db, tmp_path, Step.develop)
+        with pytest.raises(RequestObserved):
+            slice_workflow.handle_repair(db, task, run, ToolRuntime(tmp_path))
+
+
+@pytest.mark.parametrize("reporter", ["spec", "tap"])
+@pytest.mark.parametrize("message_kind", ["steps", "long_line"])
+def test_repair_diagnostic_keeps_assertion_after_long_application_logs(tmp_path, monkeypatch, reporter, message_kind):
+    """复现真实断言消息很长时，摘要仍须包含末尾失败行号和实际／期望值。"""
+    (tmp_path / "product").mkdir()
+    message = "Array(80).fill('[step] browser operation succeeded').join('\\n')" if message_kind == "steps" else "'X'.repeat(8000)"
+    (tmp_path / "product/long.test.cjs").write_text(
+        "const test=require('node:test'); const assert=require('node:assert/strict');\n"
+        f"test('long browser evidence',()=>assert.equal(false,true,{message}));\n"
+        "test('unrelated successful test',()=>assert.ok(true));\n")
+    scope = ["product/long.test.cjs"]
+    with SessionLocal() as db:
+        task, run = make_task(db, tmp_path, Step.develop)
+        tools = slice_workflow.SliceTools(tmp_path, scope, [], submission_files=scope,
+                                         self_test_files=scope, test_files=scope)
+        monkeypatch.setattr(tools, "self_test_command", lambda: f"node --test --test-reporter={reporter} long.test.cjs")
+        report = slice_workflow._repair_diagnostic(db, task, run, tools)
+        excerpt = report["failure_report"]
+        assert report["passed"] is False
+        assert "long browser evidence" in excerpt
+        assert "long.test.cjs:2" in excerpt
+        assert "ERR_ASSERTION" in excerpt
+        assert "actual: false" in excerpt and "expected: true" in excerpt
+        assert "[step]" not in excerpt and "unrelated successful test" not in excerpt
+        full_report = (tmp_path / report["detail_path"]).read_text()
+        assert ("[step]" if message_kind == "steps" else "X" * 8000) in full_report
+        assert tools.self_test is None and tools.submitted_hashes is None
+
+
+def test_passing_diagnostic_is_cached_per_version_without_authorizing_submission(tmp_path, monkeypatch):
+    """同版本恢复不重复诊断，修改使缓存过期；诊断通过仍需主动自测。"""
+    from backend.app.runtime.unit_workflow import file_hashes
+    (tmp_path / "product").mkdir()
+    implementation = tmp_path / "product/materials.js"
+    implementation.write_text("module.exports = 1;\n")
+    (tmp_path / "product/material-create.test.js").write_text(
+        "const test=require('node:test'); const assert=require('node:assert/strict');\n"
+        "test('material',()=>assert.equal(require('./materials.js'),1));\n")
+    scope = ["product/materials.js", "product/material-create.test.js"]
+    calls = []
+    original = worker.execute_tool
+
+    def counted(*args, **kwargs):
+        calls.append(args[4])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "execute_tool", counted)
+    with SessionLocal() as db:
+        task, run = make_task(db, tmp_path, Step.develop)
+        tools = slice_workflow.SliceTools(tmp_path, scope, scope, submission_files=scope,
+                                         self_test_files=scope, test_files=scope[1:])
+        report = slice_workflow._repair_diagnostic(db, task, run, tools)
+        assert report["passed"] is True
+        assert slice_workflow._repair_diagnostic(db, task, run, tools) == report
+        assert len(calls) == 1
+        assert tools.self_test is None
+        assert tools.execute(ToolCall("early", "submit_unit_for_test", {})).error == "unit_self_test_required"
+        context = {"unit_file_scope": scope, "owned_files": scope, "require_unit_submission": True,
+                   "unit_diagnostic": report}
+        value = worker.build_tool_context(task, run, context, [], "diagnostic")
+        assert value["development_state"]["test_state"] == "passed"
+        assert value["development_state"]["next_action"] == "run_unit_tests"
+        assert value["current_task"]["remaining_work"]["needs_current_self_test"] is True
+        implementation.write_text("module.exports = 0;\n")
+        stale = worker.build_tool_context(task, run, context, [], "diagnostic")
+        assert stale["unit_diagnostic"]["matches_current_files"] is False
+        assert stale["development_state"]["test_state"] == "stale"
+        updated = slice_workflow._repair_diagnostic(db, task, run, tools)
+        assert len(calls) == 2 and updated["passed"] is False
+        assert updated["file_hashes_after"] == file_hashes(tmp_path, scope)
+        implementation.write_text("module.exports = 1;\n")
+        assert slice_workflow._repair_diagnostic(db, task, run, tools) == report
+        assert len(calls) == 2
+
+
+def test_repair_batch_diagnostic_allows_more_edits_and_reuses_explicit_self_test(tmp_path, monkeypatch):
+    """一批修改只诊断一次并接力上下文；诊断不能代替自测，仍允许继续改。"""
+    from backend.app.runtime.contracts import ModelResult
+    from backend.app.runtime.model import build_messages
+    (tmp_path / "product").mkdir()
+    (tmp_path / "product/a.cjs").write_text("module.exports=0;")
+    (tmp_path / "product/b.cjs").write_text("module.exports=0;")
+    (tmp_path / "product/a.test.cjs").write_text(
+        "require('node:test')('sum',()=>require('node:assert/strict').equal("
+        "require('./a.cjs')+require('./b.cjs'),3));")
+    selected = {**card(), "implementation_files": ["product/a.cjs", "product/b.cjs"],
+                "test_files": ["product/a.test.cjs"]}
+    monkeypatch.setattr(slice_workflow, "load_delivery_plan", lambda root: {})
+    monkeypatch.setattr(slice_workflow, "_progress", lambda root, plan: {"slices": [
+        {"card": selected, "card_path": "docs/card.json", "status": "passed"}]})
+    received = []
+    diagnostics = []
+    original = worker.execute_tool
+
+    def counted(*args, **kwargs):
+        if kwargs.get("history_key", "").startswith("slice-repair-diagnostic:"):
+            diagnostics.append(args[4].parameters["command"])
+        return original(*args, **kwargs)
+
+    def develop(runtime, task_id, request):
+        context = request.context
+        received.append(context)
+        count = len(received)
+        messages = build_messages(request, include_reasoning=True)
+        if count == 1:
+            assert context["unit_diagnostic"]["passed"] is False
+            actions = [ToolCall("a", "replace", {"path": "product/a.cjs", "old": "=0", "new": "=1"}),
+                       ToolCall("b", "replace", {"path": "product/b.cjs", "old": "=0", "new": "=2"})]
+        elif count == 2:
+            assert [message["role"] for message in messages] == ["system", "user"]
+            assert context["context_session"]["reason"] == "changed_files_and_current_diagnostic"
+            assert context["current_requested_data"] == []
+            assert context["unit_diagnostic"]["passed"] is True
+            assert context["unit_self_test"] is None
+            assert context["development_state"]["next_action"] == "run_unit_tests"
+            assert len(diagnostics) == 2
+            actions = [ToolCall("inspect", "read", {"path": "product/a.cjs"})]
+        elif count == 3:
+            assert messages[2]["reasoning_content"] == "完整思考-2"
+            assert messages[3]["tool_call_id"] == "inspect"
+            assert len(diagnostics) == 2
+            actions = [ToolCall("early", "submit_unit_for_test", {})]
+        elif count == 4:
+            assert [message["reasoning_content"] for message in messages if message["role"] == "assistant"] == ["完整思考-2", "完整思考-3"]
+            history = context.get("reasoning_tool_history", context["tool_history"])
+            assert history[-1]["result"]["error"] == "unit_self_test_required"
+            assert len(diagnostics) == 2
+            actions = [ToolCall("more", "replace", {"path": "product/a.cjs", "old": "=1", "new": "=2"})]
+        elif count == 5:
+            assert len(messages) == 2
+            assert context["carried_file_context"][0]["content"] == "module.exports=2;"
+            assert context["unit_diagnostic"]["passed"] is False
+            assert context["unit_diagnostic"]["matches_current_files"] is True
+            assert context["development_state"]["next_action"] == "repair_current_unit_from_diagnostic"
+            assert len(diagnostics) == 3
+            actions = [ToolCall("fix", "replace", {"path": "product/a.cjs", "old": "=2", "new": "=1"}),
+                       ToolCall("test", "run_unit_tests", {})]
+        else:
+            assert len(messages) == 2
+            assert context["carried_file_context"][0]["content"] == "module.exports=1;"
+            assert context["repair_task"]["card_id"] == selected["id"]
+            assert context["owned_files"] == selected["implementation_files"] + selected["test_files"]
+            assert count == 6 and len(diagnostics) == 3
+            assert context["unit_self_test"]["passed"] is True
+            assert context["development_state"]["next_action"] == "submit_unit_for_test"
+            actions = [ToolCall("submit", "submit_unit_for_test", {})]
+        return ModelResult(request.request_id, 1, "", actions, "tool_calls", {"reasoning_content": f"完整思考-{count}"})
+
+    monkeypatch.setattr(worker, "execute_tool", counted)
+    monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", develop)
+    with SessionLocal() as db:
+        task, run = make_task(db, tmp_path, Step.develop)
+        slice_workflow.handle_repair(db, task, run, ToolRuntime(tmp_path))
+        assert len(received) == 6 and len(diagnostics) == 3
+        assert task.cur_step == Step.test and run.status == StepStatus.succeeded
+        checkpoint = json.loads(Path(run.checkpoint_path).read_text())
+        assert len(checkpoint) == 8
+        assert checkpoint[0]["reasoning_content"] == "完整思考-1"
+        assert run.model_call_count == 6
+        state = json.loads(next((tmp_path / "evidence").glob("deepseek-context-session-*.json")).read_text())
+        assert len(state["boundaries"]) == 3
+        # 恢复使用原循环 ID，不能因为成功动作计数变大而重放或丢历史。
+        saved_key = checkpoint[0]["history_key"]
+        failure_key = saved_key.split(":")[-2]
+        assert slice_workflow._repair_history_key(run, selected["id"], failure_key) == saved_key
+
+
+@pytest.mark.parametrize("passed", [True, False])
+def test_current_diagnostic_takes_precedence_over_stale_self_test(tmp_path, passed):
+    """过期的自测不能遮住当前诊断，通过诊断也不能建议直接提交。"""
+    from backend.app.runtime.unit_workflow import file_hashes
+    tools = ToolRuntime(tmp_path)
+    tools._write("product/a.cjs", "current", False)
+    scope = ["product/a.cjs"]
+    context = {"unit_file_scope": scope, "owned_files": scope, "require_unit_submission": True,
+               "repair_task": {"card_id": "repair", "original_card_ref": "evidence/card.json"},
+               "unit_self_test": {"passed": True, "file_hashes_after": {scope[0]: "old"}},
+               "unit_diagnostic": {"passed": passed, "file_hashes_after": file_hashes(tmp_path, scope)}}
+    task = Task(task_name="repair", workspace_path=str(tmp_path), cur_step=Step.develop, status=TaskStatus.running)
+    run = StepRun(task_id=1, step=Step.develop, status=StepStatus.running, attempt=1)
+    value = worker.build_tool_context(task, run, context, [], "repair")
+    assert value["unit_self_test"]["matches_current_files"] is False
+    assert value["current_task"]["effective_card"]["source_ref"] == "repair_task"
+    assert value["current_task"]["latest_evidence"]["source_ref"] == "unit_diagnostic"
+    assert value["development_state"]["test_state"] == ("passed" if passed else "failed")
+    assert value["development_state"]["next_action"] == ("run_unit_tests" if passed else "repair_current_unit_from_diagnostic")
+    assert value["current_task"]["remaining_work"]["needs_current_self_test"] is True
 
 
 def test_internal_validation_error_cannot_be_escalated_to_user(tmp_path, monkeypatch):
@@ -716,6 +1006,8 @@ def test_slice_workflow_plans_one_slice_then_uses_real_test_before_next(tmp_path
                 "material-create 的真实测试覆盖新增、列表、持久化和错误恢复",
             ]}, ensure_ascii=False)
         assert getattr(instructions, "name", None) == "slice-developer"
+        assert "replace" in {schema["function"]["name"] for schema in kwargs["tool_schemas"]}
+        assert input_text != json.dumps(context["card"], ensure_ascii=False)
         contents = {
             "product/index.html": "<!doctype html><main>Materials</main>",
             "product/styles.css": "body { font-family: sans-serif; }\n",
@@ -730,6 +1022,7 @@ def test_slice_workflow_plans_one_slice_then_uses_real_test_before_next(tmp_path
         for path, content in contents.items():
             result = tools._write(path, content, False)
             assert result["path"] == path
+        assert tools.execute(ToolCall("patch", "replace", {"path":"product/materials.js", "old":"x => x", "new":"x => ({...x})"})).status == "succeeded"
         tested = tools._run_unit_tests()
         assert tested["passed"] is True
         tools._submit_unit_for_test()

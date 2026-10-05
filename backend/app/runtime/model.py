@@ -25,13 +25,32 @@ def build_messages(request: ModelRequest, include_reasoning: bool = False) -> li
     reasoning_history = context.pop("reasoning_tool_history", None)
     if include_reasoning and reasoning_history is not None:
         tool_history = reasoning_history
+    if include_reasoning:
+        # 当前会话原样续传完整思考；只去掉已由协议工具消息提供的重复结果正文。
+        tool_history = [entry for entry in tool_history if "reasoning_content" in entry]
+        results = {entry["action"]["call_id"]: entry["result"] for entry in tool_history
+                   if entry.get("action") and entry.get("result")}
+        context["current_requested_data"] = [
+            {"call_id": item["call_id"], "tool_name": item.get("tool_name"), "content_source": "tool_message"}
+            if item.get("call_id") in results and item == results[item["call_id"]] else item
+            for item in context.get("current_requested_data", [])]
+    # 完整自测结果已在实际协议消息中时只引用，仍提供真实状态与版本适用性。
+    self_test = context.get("unit_self_test")
+    if isinstance(self_test, dict):
+        for entry in reversed(tool_history):
+            action, result = entry.get("action", {}), entry.get("result", {})
+            output = result.get("output", {})
+            if (action.get("tool_name") == "run_unit_tests" and result.get("status") == "succeeded"
+                    and self_test.get("result") is not None and self_test["result"] == output.get("result")
+                    and self_test.get("file_hashes_after") == output.get("file_hashes_after")
+                    and self_test.get("passed") == output.get("passed")):
+                context["unit_self_test"] = {key: value for key, value in self_test.items() if key != "result"} | {
+                    "result_ref": {"call_id": action["call_id"], "content_source": "tool_message"}}
+                break
     messages = [
         {"role": "system", "content": request.instructions},
         {"role": "user", "content": json.dumps({"input": request.input, "context": context}, ensure_ascii=False)},
     ]
-    if include_reasoning:
-        # DeepSeek thinking 仅续传有原始思考记录的工具轮次，旧检查点不伪造思考内容。
-        tool_history = [entry for entry in tool_history if "reasoning_content" in entry]
     index = 0
     while index < len(tool_history):
         entry = tool_history[index]

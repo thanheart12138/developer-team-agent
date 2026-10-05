@@ -666,7 +666,7 @@ def handle_develop(db, task, run, tools) -> None:
                             'matches_current_files':progress['units'][u['id']]['file_hashes'] == file_hashes(root, [p for dependency in dependency_units(u, ordered) + [u] for p in dependency['implementation_files'] + dependency['test_files']])}
                             for u in completed],
                         'dependency_interfaces':[m for m in plan['modules'] if m['id'] in {u['module_id'] for u in dependencies}]},
-                    scoped, tool_schemas=[s for s in TOOL_SCHEMAS if s['function']['name'] in {'read', 'write'}] + [RUN_UNIT_TESTS_SCHEMA, SUBMIT_UNIT_SCHEMA],
+                    scoped, tool_schemas=[s for s in TOOL_SCHEMAS if s['function']['name'] in {'read', 'write', 'replace'}] + [RUN_UNIT_TESTS_SCHEMA, SUBMIT_UNIT_SCHEMA],
                     stop_when=lambda: scoped.submitted_hashes is not None,
                     history_key=f'unit:{plan_hash}:{unit["id"]}:{attempt}')
                 if response.strip().startswith('BLOCKED:'):

@@ -30,6 +30,20 @@ v1 最小完整链路已实现。v2 在此基础上增加全过程实时可视�
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ：当前有效的 v2 架构设计与技术选择。
 - [docs/DEV_DESIGN.md](docs/DEV_DESIGN.md) ：当前有效的 v2 接口、数据、状态、关键流程和失败策略。
 
+## 手动模型实验留存
+
+付费隔离实验统一保存到 `workspace/experiments/<experiment>/`，包含 SQLite、生成产品、完整 Trace／检查点、脱敏请求和调用计数；沿用 `workspace/` 的 Git 忽略规则。恢复必须明确指定原目录，缺失断点或非法计数时停止，不自动新建数据库或重置次数。实验控制脚本也须留在项目或实验目录，完整断点不只留报告摘要。
+
+正式任务继续使用 MySQL 和 `workspace/{task_id}/`。本地留存不是异地备份，旧已丢失实验不会被自动恢复；真实调用仍需明确范围与预算。入口及目录约定见 [docs/README.md](docs/README.md) ，机制证据见 [留存验证](docs/evidence/experiment-storage-validation-20261003.md) 。
+
+## 当前本机服务（2026-10-03 恢复验证）
+
+- 前端：[http://127.0.0.1:5173](http://127.0.0.1:5173) ，旧任务示例：[Task 23](http://127.0.0.1:5173/?task=23) 。
+- API：[http://127.0.0.1:8001/health](http://127.0.0.1:8001/health) ，8000 已由其他项目占用，本轮保留该服务。
+- MySQL 沿用已有 `id-photo-mysql` 数据卷和 `dev_team_simulator`；单 Worker 已恢复，启动前没有可运行任务或待处理事件。
+
+本轮仅在进程环境设置数据库认证和前端 `VITE_BACKEND_URL`，未修改 `.env`。正式任务／调用计数／表结构／产品哈希保持，真实 Chrome 只读界面检查通过；旧临时素材平台未恢复，新模型返修未执行。证据见 [正式服务恢复](docs/evidence/formal-service-recovery-20261003.md) 。以下 Windows 命令仍使用其默认端口。
+
 ## Windows 本地运行
 
 模型回答保留实时展示，但流式片段不永久保存。审计保存完整请求、合并后的响应、工具和状态记录；调用中断时保存部分响应与错误。当前回答使用系统临时目录中的单份快照，调用结束清空，旧版流式 Trace 不删除。

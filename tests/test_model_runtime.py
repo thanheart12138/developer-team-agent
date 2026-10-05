@@ -156,6 +156,32 @@ def test_deepseek_thinking_history_keeps_assistant_turn_without_tool():
     assert messages[2] == {"role": "assistant", "content": "先自测", "reasoning_content": "还需要提交"}
 
 
+def test_deepseek_message_data_is_referenced_once_without_changing_evidence():
+    import copy
+    import json
+    result = {"call_id": "read-a", "tool_name": "read", "status": "succeeded",
+              "output": {"content": "unique-file-body", "sha256": "version"}}
+    history = [{"model_request_id": "previous", "reasoning_content": "完整原始思考",
+                "action": {"call_id": "read-a", "tool_name": "read", "parameters": {}},
+                "result": result}]
+    unique = {"call_id": "other", "tool_name": "read", "output": {"content": "other-body"}}
+    context = {"reasoning_tool_history": history, "current_requested_data": [result, unique]}
+    original = copy.deepcopy(context)
+    request = ModelRequest("instructions", "input", context, [], "next")
+    messages = build_messages(request, include_reasoning=True)
+    data = json.loads(messages[1]["content"])["context"]["current_requested_data"]
+    assert data[0] == {"call_id": "read-a", "tool_name": "read", "content_source": "tool_message"}
+    assert data[1] == unique
+    assert sum("unique-file-body" in message.get("content", "") for message in messages if message.get("content")) == 1
+    assert messages[2]["reasoning_content"] == "完整原始思考"
+    assert context == original
+    # 新会话不续传旧投影，原始证据仍可审计。
+    context["tool_history"] = history
+    context["reasoning_tool_history"] = []
+    fresh = build_messages(request, include_reasoning=True)
+    assert [message["role"] for message in fresh] == ["system", "user"]
+
+
 def test_interrupted_stream_keeps_partial_response_without_events(monkeypatch):
     import httpx
     import pytest

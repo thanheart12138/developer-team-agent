@@ -5,9 +5,17 @@ import os
 from pathlib import Path
 import sys
 import time
+from experiment_storage import prepare_experiment_root, read_call_count, save_call_count
 
-root = Path(sys.argv[1])
-root.mkdir(parents=True, exist_ok=True)
+resume = '--resume' in sys.argv
+verified_repair_probe = '--verified-repair-probe' in sys.argv
+if verified_repair_probe and not resume:
+    # 先核对持久源目录，避免用已丢失的历史临时路径创建返修任务。
+    if '--verified-source' not in sys.argv:
+        raise ValueError('experiment_verified_source_required')
+    verified_source = prepare_experiment_root('unit-verified-source-',
+        sys.argv[sys.argv.index('--verified-source') + 1], resume=True)
+root = prepare_experiment_root('unit-workflow-', sys.argv[1], resume=resume)
 os.environ['SIMULATOR_DATABASE_URL'] = f'sqlite+pysqlite:///{root}/test.db'
 os.environ['SIMULATOR_WORKSPACE_ROOT'] = str(root / 'workspace')
 
@@ -18,15 +26,14 @@ from backend.app.models import Event, Message, Step, StepRun, StepStatus, Task, 
 from backend.app.runtime import model, worker
 from backend.app.runtime.tracing import sanitize
 
-calls = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+calls = read_call_count(root) if resume else (int(sys.argv[2]) if len(sys.argv) > 2 else 0)
+save_call_count(root, calls)
 development_probe = '--develop-probe' in sys.argv
 full_flow = '--full-flow' in sys.argv
 assert not (full_flow and development_probe)
-resume = '--resume' in sys.argv
 http_limit = 300
 current_only = '--current-only' in sys.argv
 integration_fault = '--integration-fault' in sys.argv
-verified_repair_probe = '--verified-repair-probe' in sys.argv
 self_test_fault = '--self-test-fault' in sys.argv
 fault_applied = False
 if self_test_fault:
@@ -84,8 +91,6 @@ if current_only:
         return messages
 
     model.build_messages = current_messages
-if resume:
-    calls = int((root / 'call-count.json').read_text())
 original_stream = httpx.Client.stream
 
 
@@ -96,7 +101,7 @@ def bounded_stream(client, method, url, **kwargs):
         if calls >= http_limit:
             raise RuntimeError('unit_validation_total_http_budget_300_exceeded')
         calls += 1
-        (root / 'call-count.json').write_text(json.dumps(calls))
+        save_call_count(root, calls)
         (root / f'sent-{calls:03d}.json').write_text(json.dumps(sanitize(kwargs['json']), ensure_ascii=False, indent=2))
         print('MODEL_HTTP', calls, flush=True)
     return original_stream(client, method, url, **kwargs)
@@ -181,7 +186,7 @@ with SessionLocal() as db:
             (docs / 'dev-design.md').write_text('固定合成设计索引，仅验证单元开发机制。')
             if verified_repair_probe:
                 # 仅返修探针复用已验证字节与测试进度，不作为新软件自主开发成功证据。
-                source = Path('/private/tmp/unit-workflow-development-probe-20260917/workspace/1')
+                source = verified_source / 'workspace/1'
                 copied = []
                 for unit in plan['units']:
                     for relative in unit['implementation_files'] + unit['test_files']:

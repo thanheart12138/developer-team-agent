@@ -1,11 +1,13 @@
 import os
-import tempfile
 import sys
 from dataclasses import replace
 from pathlib import Path
+from experiment_storage import prepare_experiment_root, read_call_count, save_call_count
+
 resume = '--resume' in sys.argv
-root = (Path(sys.argv[sys.argv.index('--resume') + 1]) if resume
-        else Path(tempfile.mkdtemp(prefix='context-full-deepseek-')))
+root = prepare_experiment_root('context-full-deepseek-',
+    sys.argv[sys.argv.index('--resume') + 1] if resume else None, resume=resume)
+calls = read_call_count(root)
 os.environ['SIMULATOR_DATABASE_URL'] = f'sqlite+pysqlite:///{root}/test.db'
 os.environ['SIMULATOR_WORKSPACE_ROOT'] = str(root / 'workspace')
 import json
@@ -19,18 +21,14 @@ from backend.app.runtime.tracing import sanitize
 model.KIMI_STEPS.clear()
 worker.MAX_REPAIR_ROUNDS = 2
 legacy = '--legacy' in sys.argv
-calls = 0
-if resume:
-    with SessionLocal() as previous_db:
-        calls = len(list(previous_db.scalars(select(TraceRecord).where(TraceRecord.type == 'model_request'))))
 original_call = model.DeepSeekRuntime.call
 def bounded_call(self, task_id, request):
-    # 所有实际传输尝试合计最多三十次。
+    # 沿用本基准的三十次 Runtime 调用上限，恢复保留原计数。
     global calls
     if calls >= 30:
         raise RuntimeError('full_test_total_call_budget_exceeded')
     calls += 1
-    (root / 'call-count.json').write_text(json.dumps(calls))
+    save_call_count(root, calls)
     print(f'MODEL_CALL {calls}', flush=True)
     # Legacy 模式仅重建优化前的请求内容，不撤销返修正确性修复。
     if legacy:
@@ -80,8 +78,6 @@ print('ROOT', root, 'legacy', legacy, flush=True)
 with SessionLocal() as db:
     if resume:
         task = db.get(Task, 1)
-        if (root / 'call-count.json').is_file():
-            calls = json.loads((root / 'call-count.json').read_text())
         worker.process_pending_event(db)
     else:
         task = Task(task_name='context full DeepSeek validation', status=TaskStatus.pending, cur_step=Step.product_docs)

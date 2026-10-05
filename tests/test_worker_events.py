@@ -28,6 +28,38 @@ def setup_function():
     Base.metadata.create_all(engine)
 
 
+def test_acceptance_inspection_large_file_reads_disjoint_ranges(tmp_path, monkeypatch):
+    """大文件调查保持分段范围，不因全文超限退回通用澄清。"""
+    from backend.app.runtime import worker
+    (tmp_path / "product").mkdir()
+    (tmp_path / "product/app.js").write_text("//" + "x" * 600 + "\n" +
+                                            ("//" + "y" * 600 + "\n") * 399)
+    contexts = []
+
+    def fake_loop(*args, **kwargs):
+        """要求调查同一文件后续行，再根据真实片段分类。"""
+        context = args[5]
+        contexts.append(context)
+        if len(contexts) <= 2:
+            return json.dumps({"action": "inspect", "path": "product/app.js"})
+        return json.dumps({"action": "modify_code", "reason": "实际代码不符合期望",
+                           "confidence": 0.9, "evidence": ["product/app.js"]})
+
+    monkeypatch.setattr(worker, "model_tool_loop", fake_loop)
+    with SessionLocal() as db:
+        task = Task(task_name="inspect", workspace_path=str(tmp_path))
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.verify_product, attempt=1)
+        db.add(run); db.commit()
+        result, evidence = worker.plan_acceptance_action(
+            db, task, run, "资源异常", {}, ["product/app.js"])
+        assert result["classification"] == "implementation_defect"
+        fragments = evidence["product/app.js"]["fragments"]
+        assert len(fragments) == 2 and fragments[0]["truncated"] is True
+        assert fragments[1]["start_line"] == fragments[0]["end_line"] + 1
+        assert evidence["product/app.js"]["complete"] is False
+
+
 def waiting_task(db):
     task = Task(task_name="calculator", cur_step=Step.product_docs, status=TaskStatus.waiting_user,
                 workspace_path="/tmp/dev-team-simulator-tests/event-task")
@@ -954,6 +986,9 @@ def test_model_loop_allows_the_one_hundredth_logical_call(tmp_path, monkeypatch)
     def fake_call(runtime, task_id, request):
         nonlocal calls
         calls += 1
+        assert request.context["model_call_budget"] == {
+            "unit": "logical_model_call", "limit": 100, "used_including_current": 100,
+            "remaining_after_current": 0, "transport_retries_counted": False}
         return ModelResult(request.request_id, 1, "DONE", [], "completed")
 
     monkeypatch.setattr("backend.app.runtime.model.ChatCompletionsRuntime.call", fake_call)
@@ -1085,6 +1120,41 @@ def test_successful_replace_resets_repair_no_write_guard():
     assert _repair_actions_without_write(entries, "repair") == 1
     entries[1]["result"]["status"] = "failed"
     assert _repair_actions_without_write(entries, "repair") == 3
+
+
+@pytest.mark.parametrize('replace_succeeded', [True, False])
+def test_replace_can_recover_after_repair_diagnostic_limit(tmp_path, monkeypatch, replace_succeeded):
+    # 达到诊断阈值后仍执行替换；仅成功替换恢复诊断额度，失败不能绕过门禁。
+    calls = 0
+    executed = []
+
+    def fake_call(runtime, task_id, request):
+        nonlocal calls
+        calls += 1
+        if calls == 8:
+            return ModelResult(request.request_id, calls, 'DONE', [], 'completed')
+        action = ToolCall(str(calls), 'replace', {'path':'product/app.js', 'old':'old', 'new':'new'}) if calls == 6 else ToolCall(str(calls), 'exec', {'action':'run', 'command':f'diagnose-{calls}'})
+        return ModelResult(request.request_id, calls, '', [action], 'tool_calls')
+
+    class FakeTools:
+        def execute(self, call):
+            executed.append(call.call_id)
+            status = 'failed' if call.tool_name == 'replace' and not replace_succeeded else 'succeeded'
+            return ToolResult(call.call_id, call.tool_name, status, {'exit_code':0}, 'replace_failed' if status == 'failed' else None)
+
+    monkeypatch.setattr('backend.app.runtime.model.ChatCompletionsRuntime.call', fake_call)
+    with SessionLocal() as db:
+        task = Task(task_name='replace recovery', cur_step=Step.develop, status=TaskStatus.running,
+                    workspace_path=str(tmp_path), repair_round=1)
+        db.add(task); db.flush()
+        run = StepRun(task_id=task.id, step=Step.develop, status=StepStatus.running, attempt=1,
+                      checkpoint_path=str(tmp_path/'evidence/checkpoint.json'))
+        db.add(run); db.commit()
+        assert model_tool_loop(db, task, run, 'repair', 'input', {'repair_round':1}, FakeTools()) == 'DONE'
+        assert '6' in executed
+        assert ('7' in executed) is replace_succeeded
+        guards = list(db.scalars(select(TraceRecord).where(TraceRecord.task_id == task.id, TraceRecord.type == 'tool_guard')))
+        assert len(guards) == (0 if replace_succeeded else 1)
 
 
 def test_product_revision_receives_complete_user_history(tmp_path, monkeypatch):
@@ -2033,3 +2103,28 @@ def test_existing_design_change_cannot_skip_develop_when_design_text_reused(
         db.add(run); db.commit()
         handle_develop(db, task, run, ToolRuntime(tmp_path))
         assert called and task.cur_step == Step.test
+def test_current_task_focus_keeps_original_objective_and_distinguishes_old_failure(tmp_path):
+    # 当前任务视图覆盖旧托管职责，但不改原始卡片业务和未闭合目标。
+    from backend.app.runtime import worker
+    task=Task(task_name='focus',workspace_path=str(tmp_path),cur_step=Step.develop,status=TaskStatus.running)
+    run=StepRun(task_id=1,step=Step.develop,status=StepStatus.running,attempt=1)
+    tools=ToolRuntime(tmp_path)
+    tools._write('product/a.js','current',False)
+    card={'id':'ui','goal':'编辑素材后刷新保留；verify_product.py 提供静态服务','acceptance':['笔记编辑后保存']}
+    objectives=[{'id':'E4-1','status':'open','original_feedback':'页面必须能编辑笔记'}]
+    context={'unit_file_scope':['product/a.js'],'owned_files':['product/a.js','product/a.test.cjs'],
+             'unit':{'id':'ui'},'require_unit_submission':True,'card':card,
+             'unresolved_acceptance_objectives':objectives,
+             'unit_test_feedback':{'passed':False,'failure_report':'旧版本失败','file_hashes_after':{'product/a.js':'old'}}}
+    value=worker.build_tool_context(task,run,context,[],'focus')
+    focus=value['current_task']
+    assert focus['original_objectives_ref']=='unresolved_acceptance_objectives'
+    assert focus['effective_card']['execution_contract_ref']=='verification_execution_contract'
+    assert focus['latest_evidence']['state']=='stale'
+    assert focus['latest_evidence']['matches_current_files'] is False
+    assert focus['remaining_work']['missing_owned_files']==['product/a.test.cjs']
+    assert focus['remaining_work']['needs_current_self_test'] is True
+    assert focus['remaining_work']['needs_explicit_submission'] is True
+    assert focus['remaining_work']['objectives_pending_independent_verification']==['E4-1']
+    assert value['card']==card and value['unresolved_acceptance_objectives']==objectives
+    assert '当前执行契约' in focus['effective_card']['precedence']

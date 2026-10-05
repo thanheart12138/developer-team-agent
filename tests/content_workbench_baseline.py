@@ -7,11 +7,23 @@ import shutil
 import subprocess
 from pathlib import Path
 import sys
-import tempfile
 import time
+from experiment_storage import prepare_experiment_root, read_call_count, save_call_count
 
-root = Path(sys.argv[sys.argv.index('--root') + 1]) if '--root' in sys.argv else Path(tempfile.mkdtemp(prefix='content-workbench-deepseek-'))
-root.mkdir(parents=True, exist_ok=True)
+resume = '--resume' in sys.argv
+if resume and '--root' not in sys.argv:
+    raise ValueError('experiment_resume_root_required')
+if '--verify-existing' in sys.argv and not resume:
+    # 独立诊断只从明确保留的源实验复制，不再依赖临时目录。
+    source_root = prepare_experiment_root('content-workbench-source-',
+        sys.argv[sys.argv.index('--verify-existing') + 1], resume=True)
+root = prepare_experiment_root('content-workbench-deepseek-',
+    sys.argv[sys.argv.index('--root') + 1] if '--root' in sys.argv else None, resume=resume)
+calls = read_call_count(root)
+if '--prior-calls' in sys.argv:
+    # 显式历史计数可保守补充，但不能降低原目录已经保存的次数。
+    calls = int(sys.argv[sys.argv.index('--prior-calls') + 1])
+    save_call_count(root, calls)
 max_http = int(sys.argv[sys.argv.index('--max-http') + 1]) if '--max-http' in sys.argv else 200
 max_step = int(sys.argv[sys.argv.index('--max-step') + 1]) if '--max-step' in sys.argv else 200
 provider = sys.argv[sys.argv.index('--provider') + 1] if '--provider' in sys.argv else 'deepseek'
@@ -53,7 +65,6 @@ for name in ('handle_product_docs', 'handle_reviewed_doc', 'handle_develop', 'ha
     (adapted / f'{name}.py').write_text(source)
     exec(compile(source, str(adapted / f'{name}.py'), 'exec'), worker.__dict__)
 
-calls = int(sys.argv[sys.argv.index('--prior-calls') + 1]) if '--prior-calls' in sys.argv else 0
 original_stream = httpx.Client.stream
 
 def bounded_stream(self, method, url, **kwargs):
@@ -63,7 +74,7 @@ def bounded_stream(self, method, url, **kwargs):
         if calls >= max_http:
             raise RuntimeError(f'baseline_total_http_budget_{max_http}_exceeded')
         calls += 1
-        (root / 'call-count.json').write_text(json.dumps(calls))
+        save_call_count(root, calls)
         sent = root / 'sent-requests'
         sent.mkdir(exist_ok=True)
         (sent / f'{calls:03d}.json').write_text(json.dumps(sanitize(kwargs.get('json', {})), ensure_ascii=False, indent=2))
@@ -77,7 +88,6 @@ requirement += '\n\n本次用户确认的执行约束：原生 JavaScript 多模
 print('ROOT', root, flush=True)
 with SessionLocal() as db:
     diagnostic = '--verify-existing' in sys.argv
-    resume = '--resume' in sys.argv
     if resume:
         task = db.scalar(select(Task).order_by(Task.id))
         if task is None:
@@ -139,7 +149,6 @@ with SessionLocal() as db:
         db.flush()
         task.workspace_path = str(root / 'workspace' / str(task.id))
         if diagnostic:
-            source_root = Path(sys.argv[sys.argv.index('--verify-existing') + 1])
             for directory in ('docs', 'product'):
                 shutil.copytree(source_root / 'workspace/1' / directory, Path(task.workspace_path) / directory)
             requirement = '原始自动任务失败；本任务仅独立验证其已有生成产物，不计为完整基准成功。\n' + requirement

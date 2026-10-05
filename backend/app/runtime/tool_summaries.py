@@ -54,6 +54,7 @@ class ToolSummaryStore:
         parameters = call.parameters
         output = result.output
         failed = (result.status != "succeeded" or output.get("timed_out")
+                  or (call.tool_name == "run_unit_tests" and output.get("passed") is not True)
                   or (call.tool_name == "exec" and parameters.get("action") == "run"
                       and (output.get("exit_code") != 0 or "[SKIP]" in output.get("stdout", "")))
                   or (call.tool_name == "exec" and parameters.get("action") == "start" and not output.get("running")))
@@ -68,20 +69,38 @@ class ToolSummaryStore:
         operation = [call.tool_name, parameters.get("path"), parameters.get("action"), parameters.get("command"),
                      parameters.get("file_path"), parameters.get("model_call_id"), parameters.get("summary_id"), parameters.get("section")]
         row["operation_key"] = hashlib.sha256(json.dumps(operation, ensure_ascii=False).encode()).hexdigest()
-        if call.tool_name in {"write", "read"}:
+        if call.tool_name in {"write", "replace", "read"}:
             after = self.file_state(parameters.get("path"))
             row.update(after)
             row["hash_algorithm"] = "sha256"
-            if call.tool_name == "write":
-                row.update(operation="overwrite" if parameters.get("overwrite") else "create",
+            if call.tool_name in {"write", "replace"}:
+                # 局部替换也是实际写入，必须登记前后版本供后续上下文查询。
+                row.update(operation="replace" if call.tool_name == "replace" else "overwrite" if parameters.get("overwrite") else "create",
                            before_hash=before.get("hash"), after_hash=after.get("hash") if status == "succeeded" else None,
                            changed=before.get("hash") != after.get("hash") if status == "succeeded" else False,
                            bytes_written=output.get("bytes_written"))
                 row.pop("hash", None)
-                row["result_summary"] = f"write: {status}; changed={row['changed']}"
+                row["result_summary"] = f"{call.tool_name}: {status}; changed={row['changed']}"
             else:
                 row["hash"] = output.get("sha256", before.get("hash"))
                 row["truncated"] = output.get("truncated")
+                row.update(start_line=output.get("start_line"), end_line=output.get("end_line"),
+                           total_lines=output.get("total_lines"))
+        elif call.tool_name == "run_unit_tests":
+            # 自测工具运行完成不代表测试通过，摘要保留内层命令结果与实际测试版本。
+            command_result = output.get("result", {})
+            command_output = command_result.get("output", {})
+            row.update(command=output.get("command"), passed=output.get("passed"),
+                       exit_code=command_output.get("exit_code"), timed_out=command_output.get("timed_out"),
+                       code_hashes=output.get("file_hashes_before", {}))
+            row["result_summary"] = f"run_unit_tests: {status}; passed={row['passed']}; exit_code={row['exit_code']}"
+            if failed:
+                failure_text = str(result.error or command_result.get("error")
+                                   or command_output.get("stderr") or command_output.get("stdout")
+                                   or "unit_self_test_failed")
+                # Node 输出可能先列出大量成功项，优先保留真实失败项及其附近诊断。
+                failure_offset = max(0, failure_text.find("not ok") - 200)
+                row["error_excerpt"] = failure_text[failure_offset:failure_offset + 4000]
         elif call.tool_name == "exec":
             row.update(action=parameters.get("action"), command=str(parameters.get("command") or "")[:500],
                        exit_code=output.get("exit_code"), timed_out=output.get("timed_out"),
@@ -89,7 +108,7 @@ class ToolSummaryStore:
             if parameters.get("action") == "run":
                 row["code_hashes"] = code_hashes
             row["result_summary"] = f"exec {row['action']}: {status}; exit_code={row['exit_code']}"
-        if failed:
+        if failed and "error_excerpt" not in row:
             row["error_excerpt"] = str(result.error or output.get("stderr") or output.get("stdout") or "tool_execution_failed")[:4000]
         # 原始大文本只保留 Trace，查询摘要不复制查询结果或代码全文。
         row = sanitize(row)
@@ -117,13 +136,13 @@ class ToolSummaryStore:
                 "next_cursor": end if end < len(records) else None}
 
     def file_history(self, file_path: str, cursor: int | None = None) -> dict:
-        # 返回成功 write 的修改记录，并核对当前文件是否仍为最后记录版本。
+        # 返回成功写入／替换的修改记录，并核对当前文件是否仍为最后记录版本。
         state = self.file_state(file_path)
         if not state:
             self.safe_path(file_path)
             raise ValueError("invalid_file_path")
         records = [row for row in self.load() if row.get("file_path") == state["file_path"]
-                   and row["tool_name"] == "write" and row["status"] == "succeeded"]
+                   and row["tool_name"] in {"write", "replace"} and row["status"] == "succeeded"]
         return {**self.page(list(reversed(records)), cursor), "file_path": state["file_path"],
                 "current_hash": state["hash"], "matches_last_record": state["hash"] == records[-1]["after_hash"] if records else None}
 
@@ -172,9 +191,10 @@ class ToolSummaryStore:
                 requested.append(entry['result'])
         files = {}
         for row in records:
-            if row.get('file_path') and row['tool_name'] in {'read', 'write'}:
+            if row.get('file_path') and row['tool_name'] in {'read', 'write', 'replace'}:
                 state = files.setdefault(row['file_path'], {'file_path':row['file_path']})
-                state[row['tool_name']] = row
+                # 写入与局部替换共用最新写入状态，保持原投影字段兼容。
+                state['write' if row['tool_name'] == 'replace' else row['tool_name']] = row
                 state['sequence'] = row['sequence']
         states = []
         for path, entries in sorted(files.items(), key=lambda item:item[1]['sequence']):
@@ -190,7 +210,12 @@ class ToolSummaryStore:
                     state['latest_' + kind].update(recorded_hash=recorded,
                         matches_current_files=current is not None and current == recorded and row['status'] == 'succeeded')
                     if kind == 'read':
-                        state['latest_read']['complete'] = row['status'] == 'succeeded' and row.get('truncated') is False
+                        state['latest_read'].update(start_line=row.get('start_line'), end_line=row.get('end_line'),
+                                                    total_lines=row.get('total_lines'))
+                        # 未记录范围的旧摘要不证明完整读取，局部成功也不等于全文件已读。
+                        state['latest_read']['complete'] = (row['status'] == 'succeeded' and row.get('truncated') is False
+                            and row.get('total_lines') is not None and row.get('start_line') in {None, 1}
+                            and (row.get('end_line') is None or row['end_line'] == row['total_lines']))
             states.append(state)
         # 仅同操作的后续成功能替换失败，其他命令成功不清除旧故障证据。
         latest = {}
@@ -201,7 +226,10 @@ class ToolSummaryStore:
                     for row in latest.values() if row["status"] in {"failed", "blocked"}]
         # 执行成功与验证当前版本分开表达，不把旧版本结果套到新文件。
         executions = [{"summary_id": row["summary_id"], "command": row.get("command"),
-                       "status": row["status"], "matches_current_files": row["code_hashes"] == code_hashes}
+                       "status": row["status"], "matches_current_files":
+                       (bool(row['code_hashes']) and row['code_hashes'] ==
+                        {path:self.file_state(path)['hash'] for path in row['code_hashes']})
+                       if row['tool_name'] == 'run_unit_tests' else row['code_hashes'] == code_hashes}
                       for row in latest.values() if "code_hashes" in row]
         return {"tool_history": recent, "recent_model_call_id": recent_id, "tool_summaries": states[-PAGE_SIZE:],
                 "earlier_summary_count": max(0, len(states) - PAGE_SIZE), 'current_requested_data':requested,

@@ -18,7 +18,8 @@ def load(root: Path) -> dict:
 def capture(root: Path, triage: dict) -> None:
     """按验收事件保存原始目标和失败证据，重复消费时保持原文。"""
     from . import worker as w
-    if triage.get("classification") != "implementation_defect":
+    if triage.get("classification") not in {
+            "implementation_defect", "dev_design_defect", "architecture_defect"}:
         return
     ledger = load(root)
     event_id = triage["event_id"]

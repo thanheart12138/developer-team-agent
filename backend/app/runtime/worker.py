@@ -23,6 +23,7 @@ from ..config import settings
 from ..database import SessionLocal
 from ..models import Event, EventStatus, Message, Step, StepRun, StepStatus, Task, TaskStatus, TraceRecord
 from .contracts import ModelRequest, ToolCall, ToolResult
+from .context_relay import DeepSeekContextRelay, covered_end_line
 from .model import ModelProtocolError, create_model_runtime
 from .prompt_registry import PromptContent, sha256_text
 from .tools import TOOL_SCHEMAS, QUERY_TOOL_SCHEMAS, ToolRuntime
@@ -48,6 +49,15 @@ MAX_REPAIR_ROUNDS = 3
 MAX_NO_CHANGE_CORRECTIONS = 2
 MAX_IDENTICAL_TOOL_ACTIONS = 2
 MAX_REPAIR_ACTIONS_WITHOUT_WRITE = 5
+
+# 明确系统执行职责，旧执行卡的服务托管描述不能替代当前验证契约。
+VERIFICATION_EXECUTION_CONTRACT = {
+    "service_owner": "Worker 负责启动和停止产品服务；验证脚本不得创建 HTTP 服务或绑定端口。",
+    "browser_script": "verify_product.py 接受命令行传入的位置 URL，在该当前产品 URL 上实际操作浏览器；不得回退旧地址或输出 skip 冒充通过。",
+    "test_fixture": "Node 测试可以启动临时产品服务作为 URL 夹具，但不得要求验证脚本自行托管服务。",
+    "legacy_conflicts": "当前契约优先于旧卡和测试的服务启动要求；在已有文件权限内修正冲突的服务实现断言或日志文字匹配，保留真实执行结果与业务断言。",
+    "preserve_acceptance": "不得改变批准产品需求、业务规则和公共接口语义，不得删除业务操作／断言、使用 skip 或恒真断言。",
+}
 MAX_BUG_PLANNER_DECISIONS = 12
 MAX_BUG_EXTRA_INSPECTIONS = 3
 
@@ -63,27 +73,85 @@ def _action_signature(action: ToolCall) -> str:
 
 
 def unit_idle_calls(history: list[dict], versions: dict) -> int:
-    # 按文件版本统计连续无进展模型批次，交替读取或修改描述也不能绕过。
+    # 按模型批次统计连续无有效进展；实际版本变化或新的读取范围重置计数。
     batches = set()
     for entry in reversed(history):
-        if entry.get('unit_versions_before') != versions or entry.get('unit_versions_after') != versions:
+        if (entry.get('unit_versions_before') != versions or entry.get('unit_versions_after') != versions
+                or entry.get('unit_read_information_progress') is True):
+            # 同一批次的其他动作不能把已经取得的实际进展重复计为停滞。
+            batches.discard(entry.get('model_request_id'))
             break
         batches.add(entry.get('model_request_id'))
     return len(batches)
 
 
+def _read_information_span(entry: dict, tools: ToolRuntime) -> tuple | None:
+    # 从真实成功读取中取得规范路径、版本和实际返回范围，不相信调用描述。
+    result = entry.get('result', {})
+    if entry.get('action', {}).get('tool_name') != 'read' or result.get('status') != 'succeeded':
+        return None
+    output = result.get('output', {})
+    content = output.get('content')
+    if not isinstance(content, str) or not content or not output.get('sha256'):
+        return None
+    try:
+        path = str(tools._safe_path(output['path']).relative_to(tools.workspace))
+    except (KeyError, TypeError, ValueError):
+        return None
+    first = output.get('start_line') or 1
+    # 截断输出只登记实际返回的行，不能把请求但未返回的范围算作已提供。
+    return path, output['sha256'], first, first + len(content.splitlines()) - 1
+
+
+def read_information_progress(entry: dict, history: list[dict], tools: ToolRuntime) -> bool:
+    # 仅同版本中尚未返回的新行范围算信息进展，覆盖区间合并后仍去重。
+    current = _read_information_span(entry, tools)
+    if current is None:
+        return False
+    path, version, first, last = current
+    intervals = []
+    for previous in history:
+        span = _read_information_span(previous, tools)
+        if span and span[:2] == (path, version):
+            intervals.append(span[2:])
+    position = first
+    # 合并多个已有读取的覆盖，不允许路径别名或重组行区间伪造新信息。
+    for start, end in sorted(intervals):
+        if start > position:
+            break
+        position = max(position, end + 1)
+        if position > last:
+            return False
+    return position <= last
+
+
 def duplicate_read_error(action: ToolCall, history: list[dict], request_context: dict,
                          tools: ToolRuntime) -> str | None:
-    # 当前内容已随快照提供时，阻止同版本同范围的重复读取，不妨碍新文件或新范围。
+    # 当前请求仍含对应内容时阻止同版本同范围重复读取，省略或变化后允许补读。
     if action.tool_name != 'read':
         return None
     try:
         path = str(tools._safe_path(action.parameters['path']).relative_to(tools.workspace))
     except (KeyError, TypeError, ValueError):
         return None
-    snapshot = request_context.get('current_product_files', {})
-    if path not in snapshot:
+    target = tools.workspace / path
+    if not target.is_file():
         return None
+    requested_start, requested_end = action.parameters.get('start_line'), action.parameters.get('end_line')
+    for available in request_context.get('carried_file_context', []):
+        # 接力刷新后的正文独立证明当前范围；旧读记录的哈希不能替代这个新版本。
+        if available.get('path') != path or available.get('content') is None:
+            continue
+        covered = (available.get('complete') is True if requested_start is None and requested_end is None else
+                   type(requested_start) is int and type(requested_end) is int
+                   and available.get('start_line', 1) <= requested_start <= requested_end <= available.get('covered_end_line', 0))
+        if covered and available.get('sha256') == hashlib.sha256(target.read_bytes()).hexdigest():
+            return f'read_already_in_context:{path}:carried_file_context; use the available current-version content'
+    snapshot = request_context.get('current_product_files', {})
+    available_results = request_context.get('current_requested_data', []) + [
+        entry.get('result', {}) for entry in
+        request_context.get('tool_history', []) + request_context.get('reasoning_tool_history', [])
+        if entry.get('action', {}).get('tool_name') == 'read']
     for entry in reversed(history):
         previous = entry.get('action', {})
         result = entry.get('result', {})
@@ -96,13 +164,23 @@ def duplicate_read_error(action: ToolCall, history: list[dict], request_context:
         if previous_path != path:
             continue
         output = result.get('output', {})
+        # 历史读过不代表本次模型还看得到；只对实际保留的相同内容去重。
+        if path not in snapshot and not any(
+                available.get('status') == 'succeeded'
+                and available.get('output', {}).get('content') is not None
+                and available.get('output', {}).get('content') == output.get('content')
+                and available.get('output', {}).get('sha256') == output.get('sha256')
+                for available in available_results):
+            continue
         requested_start, requested_end = action.parameters.get('start_line'), action.parameters.get('end_line')
         if requested_start is None and requested_end is None:
             covered = (previous['parameters'].get('start_line') is None and
                        previous['parameters'].get('end_line') is None)
         elif type(requested_start) is int and type(requested_end) is int:
             first = output.get('start_line', 1)
-            last = output.get('end_line', output.get('total_lines') if not output.get('truncated') else None)
+            # 工具声明的请求结束行可能含字节截断的半行，只有实际完整返回的范围可去重。
+            last = (covered_end_line(output) if output.get('truncated') else
+                    output.get('end_line', output.get('total_lines')))
             covered = last is not None and first <= requested_start <= requested_end <= last
         else:
             covered = False
@@ -110,7 +188,7 @@ def duplicate_read_error(action: ToolCall, history: list[dict], request_context:
             continue
         prior_hash = output.get('sha256')
         if prior_hash and hashlib.sha256((tools.workspace / path).read_bytes()).hexdigest() == prior_hash:
-            return f'read_already_in_context:{path}:current_product_files; use the available content to write, test, or report a real blocker'
+            return f'read_already_in_context:{path}:available_file_content; use the available content to write, test, or report a real blocker'
     return None
 
 
@@ -281,7 +359,7 @@ def execute_tool(db: Session, task: Task, run: StepRun, tools: ToolRuntime, call
     # 执行工具并记录调用、结果及写入产物。
     started = datetime.utcnow()
     store = ToolSummaryStore(workspace_for(task))
-    before = store.file_state(call.parameters.get("path")) if call.tool_name in {"read", "write"} else {}
+    before = store.file_state(call.parameters.get("path")) if call.tool_name in {"read", "write", "replace"} else {}
     # 在执行前绑定文件版本，验证结束后不能用已修改文件冒充执行时版本。
     code_hashes = product_code_hashes(task) if call.tool_name == "exec" and call.parameters.get("action") == "run" else {}
     call_trace = safe_record_trace(db, task, run, "tool_call", "running", f"调用 {call.tool_name}",
@@ -382,6 +460,38 @@ def parse_transition_decision(text: str, kind: str, required_update: bool = Fals
     }
 
 
+def compact_repair_objectives(objectives: list[dict]) -> list[dict]:
+    # 保留逐目标业务事实，将历史大报告及过期审查正文改为完整账本引用。
+    values = []
+    for item in objectives:
+        value = {key: data for key, data in item.items()
+                 if key not in {'original_verification_report', 'latest_review', 'verified_hashes'}}
+        value['historical_evidence_ref'] = {'path':'evidence/repair-objectives.json', 'objective_id':item['id'],
+            'original_report_sha256':sha256_text(item.get('original_verification_report') or '')}
+        value['current_review_required'] = True
+        values.append(value)
+    return values
+
+
+def compact_bug_planner_context(context: dict, fresh_paths: set[str]) -> dict:
+    # 简单流程决策只提供状态与证据引用；刚完成的调查仍带真实正文。
+    triage = context['acceptance_triage']
+    value = {key: context[key] for key in (
+        'last_action_result', 'code_hashes', 'allowed_actions', 'remaining_files',
+        'remaining_decisions', 'repair_round')}
+    value['acceptance_triage'] = {key: triage[key] for key in (
+        'event_id', 'classification', 'planner_action') if key in triage}
+    value['approved_document_refs'] = {name:{'path':f'docs/{name}', 'sha256':sha256_text(body)}
+                                       for name, body in context['approved_documents'].items()}
+    value['report_refs'] = {name:{'path':f'evidence/{name}', 'sha256':sha256_text(body)}
+                            for name, body in context['reports'].items()}
+    value['inspected_content'] = {path:body for path, body in context['inspected_content'].items()
+                                  if path in fresh_paths}
+    value['inspection_refs'] = {path:{**reference, 'body_in_context':path in value['inspected_content']}
+                                for path, reference in context['inspection_refs'].items()}
+    return value
+
+
 def build_tool_context(task: Task, run: StepRun, context: dict, history: list[dict], history_key: str) -> dict:
     # 每次逻辑调用重建工具投影，刷新文件版本，不改变原始检查点。
     root = workspace_for(task)
@@ -400,10 +510,12 @@ def build_tool_context(task: Task, run: StepRun, context: dict, history: list[di
     if "existing_product_files" in value:
         value["existing_product_files"] = [str(path.relative_to(root)) for path in paths]
     if "unit_file_scope" in context:
-        # 单元开发只刷新当前单元与依赖范围，避免轮内读取结果立即丢失。
+        # 单元开发按需读正文，清单与版本继续刷新，不自动传送全部范围全文。
+        value.pop("current_product_files", None)
+        value["verification_execution_contract"] = VERIFICATION_EXECUTION_CONTRACT
         scope = set(context["unit_file_scope"])
         paths = [path for path in paths if str(path.relative_to(root)) in scope]
-    if context.get("current_product_files") or "unit_file_scope" in context:
+    if context.get("current_product_files") and "unit_file_scope" not in context:
         # 修订阶段继续提供完整当前快照；近期原始交互携带相同全文时不重复。
         contents = {str(path.relative_to(root)): path.read_text(encoding="utf-8", errors="replace") for path in paths}
         for entry in projected["tool_history"]:
@@ -431,29 +543,67 @@ def build_tool_context(task: Task, run: StepRun, context: dict, history: list[di
         missing = [path for path in context.get('owned_files', context['unit_file_scope']) if not (root / path).is_file()]
         feedback = context.get('unit_test_feedback')
         self_test = context.get('unit_self_test')
-        current_versions = {path:hashlib.sha256((root / path).read_bytes()).hexdigest() if (root / path).is_file() else None
-                            for path in (self_test or feedback or {}).get('file_hashes_after', {})}
-        evidence = self_test or feedback
-        matches = bool(evidence and evidence.get('file_hashes_after') == current_versions)
-        state = 'passed' if matches and evidence.get('passed') else 'failed' if matches else 'stale' if evidence else 'not_run'
-        if not context.get('require_unit_submission') and feedback and feedback.get('passed') is False:
-            # 旧无计划入口保留原失败提示，不要求旧报告补齐新增自测协议。
-            state = 'failed'
+        diagnostic = context.get('unit_diagnostic')
         # 旧失败保留修复依据，同时明确当前版本是否仍适用，不把改动视为成功。
-        for field, versions_field in [('unit_test_feedback', 'file_hashes_after'), ('global_failure', 'file_hashes')]:
+        for field, versions_field in [('unit_self_test', 'file_hashes_after'), ('unit_diagnostic', 'file_hashes_after'),
+                                      ('unit_test_feedback', 'file_hashes_after'), ('global_failure', 'file_hashes')]:
             report = context.get(field)
             if report:
                 versions = report.get(versions_field)
                 current = {path:hashlib.sha256((root / path).read_bytes()).hexdigest() if (root / path).is_file() else None
                            for path in versions or {}}
                 value[field] = {**report, 'matches_current_files':versions == current if versions is not None else None}
+        # 当前自测优先；修改后的新诊断不能被过期自测遮住，也不能授予提交资格。
+        self_test_current = bool(self_test and value['unit_self_test']['matches_current_files'])
+        evidence_field = ('unit_self_test' if self_test_current else 'unit_diagnostic' if diagnostic else
+                          'unit_self_test' if self_test else 'unit_test_feedback' if feedback else None)
+        evidence = value.get(evidence_field)
+        matches = bool(evidence and evidence.get('matches_current_files'))
+        state = 'passed' if matches and evidence.get('passed') else 'failed' if matches else 'stale' if evidence else 'not_run'
+        if not context.get('require_unit_submission') and feedback and feedback.get('passed') is False:
+            # 旧无计划入口保留原失败提示，不要求旧报告补齐新增自测协议。
+            state = 'failed'
         value['test_evidence_matches_current_files'] = matches
         value['development_state'] = {'unit_id':context.get('unit', {}).get('id'), 'missing_owned_files':missing,
             'test_state':state,
-            'next_action':'develop_missing_files' if missing else 'repair_current_unit_from_test_feedback' if state == 'failed' else
-                'submit_unit_for_test' if state == 'passed' and self_test and context.get('require_unit_submission') else
+            'next_action':'develop_missing_files' if missing else
+                'repair_current_unit_from_diagnostic' if state == 'failed' and evidence_field == 'unit_diagnostic' else
+                'repair_current_unit_from_test_feedback' if state == 'failed' else
+                'submit_unit_for_test' if state == 'passed' and self_test_current and context.get('require_unit_submission') else
                 'run_unit_tests' if context.get('require_unit_submission') else 'finish_development_for_program_test',
             'file_presence_is_not_test_pass':True}
+        # 当前任务先呈现原目标、有效职责和真实证据；完整依据仍只在原字段保留。
+        focus = {
+            'original_objectives_ref':'unresolved_acceptance_objectives' if 'unresolved_acceptance_objectives' in value else None,
+            'effective_card':{'source_ref':'repair_task' if 'repair_task' in value else 'card' if 'card' in value else 'unit',
+                'execution_contract_ref':'verification_execution_contract',
+                'precedence':'业务验收与文件权限仍按原卡；旧卡服务托管及日志要求由当前执行契约覆盖。'},
+            'latest_evidence':{'source_ref':evidence_field,
+                'state':state, 'matches_current_files':matches,
+                'integration_failure_ref':'global_failure' if value.get('global_failure') else
+                    'unit_test_feedback.failure_report' if (feedback or {}).get('failure_report') else None},
+            'remaining_work':{'missing_owned_files':missing,
+                'needs_current_self_test':bool(context.get('require_unit_submission') and (state != 'passed' or not self_test_current)),
+                'needs_explicit_submission':bool(context.get('require_unit_submission')),
+                'objectives_pending_independent_verification':[item['id'] for item in value.get('unresolved_acceptance_objectives', [])]},
+        }
+        # 焦点置于请求正文最前，不复制卡片、原始目标或完整错误输出。
+        value.pop('current_task', None)
+        value = {'current_task':focus, **value}
+    if context.get('repair_task'):
+        # 旧报告仅作历史修复依据，完整原文仍在已授予只读权限的证据文件中。
+        feedback = value.get('unit_test_feedback')
+        report_path = ((root / feedback['detail_path']).resolve()
+                       if feedback and isinstance(feedback.get('detail_path'), str) else None)
+        if (report_path and root.resolve() in report_path.parents and report_path.is_file()
+                and hashlib.sha256(report_path.read_bytes()).hexdigest() == feedback.get('report_sha256')):
+            value['unit_test_feedback'] = {key: item for key, item in feedback.items() if key != 'failure_report'} | {
+                'content_source':'read_on_demand', 'superseded_by_current_diagnostic':bool(value.get('unit_diagnostic'))}
+            value['current_task']['latest_evidence']['integration_failure_ref'] = 'unit_test_feedback.detail_path'
+        if (root / 'evidence/repair-objectives.json').is_file():
+            # 目标原文、期望和复现保持；历史报告和核销说明留在账本供按需读取。
+            value['unresolved_acceptance_objectives'] = compact_repair_objectives(
+                value.get('unresolved_acceptance_objectives', []))
     return value
 
 
@@ -462,7 +612,8 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                     stop_when: Callable[[], bool] | None = None,
                     tool_schemas: list[dict] | None = None,
                     history_key: str = "default",
-                    runtime_step: Step | None = None) -> str:
+                    runtime_step: Step | None = None,
+                    refresh_diagnostic: Callable[[], dict] | None = None) -> str:
     # 在预算内循环调用模型、执行工具并保存过程证据。
     prompt = instructions if isinstance(instructions, PromptContent) else None
     instruction_text = prompt.text if prompt else instructions
@@ -488,6 +639,10 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                        if entry.get("result") and entry.get("history_key", "default") == history_key]
     # 根据阶段选择主 Provider，技术失败时才尝试受控降级。
     primary_runtime = create_model_runtime(db, runtime_step or task.cur_step)
+    # 仅已有产物的 DeepSeek 切片返修启用接力，其他开发流程保持原会话边界。
+    relay = (DeepSeekContextRelay(tools, run.id, history_key)
+             if primary_runtime.provider == 'deepseek' and context.get('repair_task')
+             and refresh_diagnostic is not None else None)
     text_without_submit = 0
     if context.get('require_unit_submission'):
         # 恢复开发自测证据，过期结果只能作为旧失败依据，不能授权提交。
@@ -504,6 +659,7 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                     return 'SUBMITTED_FOR_TEST'
                 break
     while run.model_call_count < MAX_MODEL_CALLS_PER_STEP:
+        batch_versions = tools.self_test_versions() if relay else None
         if context.get('require_unit_submission'):
             from .unit_workflow import file_hashes
             versions = file_hashes(workspace_for(task), context['owned_files'])
@@ -511,7 +667,8 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             self_test_current = bool(tools.self_test and tools.restore_self_test(tools.self_test))
             if idle >= 8 and not self_test_current:
                 raise RuntimeError('unit_development_no_progress')
-            context = {**context, 'unit_self_test':tools.self_test, 'unit_no_progress':{'calls_without_file_change':idle,
+            context = {**context, 'unit_self_test':tools.self_test, 'unit_no_progress':{'calls_without_progress':idle,
+                'progress_basis':'实际文件版本变化或成功读取同版本的新范围；重复／失败读取不算进展。',
                 'instruction':('当前版本自测已通过，下一步只能立即调用 submit_unit_for_test，不要再读取或诊断。'
                                if self_test_current else
                                '先自测，通过后提交；确有设计阻塞说明 BLOCKED，禁止重复读取未变文件' if idle >= 4 else ''),
@@ -536,19 +693,42 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
         if context.get('require_unit_submission'):
             # 开发自测与后续独立验证分开，旧失败不代表修改后的版本仍失败。
             tool_instructions += '开发必须先 run_unit_tests 自测，当前版本通过后才 submit_unit_for_test。修改使旧结果过期，应重新自测；unit_self_test 返回真实自测结果，旧 unit_test_feedback/global_failure 是修复依据，不能认定未复测的新版本仍有原错误。'
-        if context.get('require_unit_submission') and context['unit_no_progress']['calls_without_file_change'] >= 4:
+            tool_instructions += 'run_unit_tests 外层 status=succeeded 仅说明工具调用完成，测试是否通过以 output.passed 和内部命令结果为准；passed=false 必须根据真实失败输出修复。没有证据时不得认定结果来自缓存。'
+        if context.get('repair_task'):
+            # 旧失败和目标历史可按需读取，当前诊断及目标业务事实仍直接提供。
+            tool_instructions += 'unit_test_feedback.content_source=read_on_demand 时完整旧报告在 detail_path；目标 historical_evidence_ref 指向完整账本。当前错误以 unit_diagnostic 为准，原始目标原文、期望与复现不能省略或被旧报告替代。'
+        if 'unit_file_scope' in context:
+            # 按需读取仍须获得实际正文，清单与旧读取状态不能代替当前可用内容。
+            tool_instructions += '当前单元不自动附带所有产品文件全文。需要正文时按清单 read 必要文件；仅本次请求仍实际含相同版本和范围的正文时不要重复读，旧内容已省略或版本变化时允许补读。文件摘要与哈希不是正文。'
+            tool_instructions += 'verification_execution_contract 是当前系统验证职责，优先于旧卡的服务托管描述。允许在权限范围内修正冲突的服务／日志测试，必须保留批准业务行为和真实操作断言。'
+        if context.get('require_unit_submission') and context['unit_no_progress']['calls_without_progress'] >= 4:
             # 无进展提醒同步提升到系统指令，避免只埋在较长文件上下文中被忽略。
             tool_instructions += ('【交接提醒】当前版本自测已通过，本轮只能调用 submit_unit_for_test，不要读取、诊断或重新测试。'
-                                  if context['unit_self_test'] and context['unit_self_test'].get('passed') else
-                                  '【无进展提醒】已连续多轮没有文件版本变化，不要再次读取已提供的文件。缺交付文件则补齐；无需修改时先 run_unit_tests，当前版本通过后立即 submit_unit_for_test。确有设计阻塞只输出 BLOCKED: 和具体问题。剩余无进展额度耗尽将停止，不会自动测试或放宽权限。')
+                                  if self_test_current else
+                                  '【无进展提醒】已连续多轮没有文件版本变化，不要再次读取已提供的文件。缺交付文件则补齐；无需修改时先 run_unit_tests，当前版本通过后立即 submit_unit_for_test。确有设计阻塞只输出 BLOCKED: 和具体问题。剩余无进展额度耗尽将停止，不会自动结束开发或放宽权限。')
         if any(schema["function"]["name"] == "get_tool_execution_detail" for schema in schemas):
             tool_instructions += "需要旧操作时用 get_file_change_history 或 get_model_call_summaries，需要原始历史参数/结果时用 get_tool_execution_detail；最新文件内容用 read。"
         request_id = str(uuid.uuid4())
         request_context = {**build_tool_context(task, run, context, history, history_key),
-                           "model_call_id": request_id}
+                           "model_call_id": request_id,
+                           # 计数已包含本次请求；沿用真实 Step 预算，不把传输重试误报为逻辑调用。
+                           "model_call_budget": {"unit": "logical_model_call", "limit": MAX_MODEL_CALLS_PER_STEP,
+                               "used_including_current": run.model_call_count,
+                               "remaining_after_current": MAX_MODEL_CALLS_PER_STEP - run.model_call_count,
+                               "transport_retries_counted": False}}
+        tool_instructions += 'model_call_budget 是当前 Step 的实际逻辑调用预算，已用包含本次，剩余为本次之后可请求次数；传输重试不计入该字段，它不是 HTTP 次数上限。安排必要修改、自测和提交，预算不会因接力或恢复重置。'
         if primary_runtime.provider == "deepseek":
-            # 保留原摘要投影供模型理解文件状态，工具轮次另按 DeepSeek 协议完整续传。
-            request_context["reasoning_tool_history"] = history
+            # 当前会话完整续传；安全边界之前的原始历史保留在审计而不拼接到新会话。
+            protocol_history, relay_context = relay.project(history, request_context) if relay else (history, {})
+            request_context["reasoning_tool_history"] = protocol_history
+            if relay_context:
+                request_context.update(relay_context)
+                current_calls = {entry.get('action', {}).get('call_id') for entry in protocol_history}
+                request_context['current_requested_data'] = [item for item in request_context.get('current_requested_data', [])
+                                                           if item.get('call_id') in current_calls]
+                tool_instructions += 'context_session 表示已从完整修改批次后开始新会话。carried_file_context 是以前实际读过或写过范围的当前版本正文，优先使用；未提供或截断的范围仍可按需读取。历史原始思考与结果只读保存在证据中，可用查询工具检索。'
+                tool_instructions += 'diagnostic_report_refs 仅为已读诊断的查询引用，报告针对当时版本，不代表当前失败；当前结果以 unit_diagnostic 及其版本适用性为准。'
+                tool_instructions += 'carried_file_refs 仅记录未携带正文的已知范围，不能视作当前可用代码；确需这些内容时可以按原权限 read。'
         request = ModelRequest(instructions=f"{BASE_INSTRUCTIONS}\n\n{instruction_text}\n\n{tool_instructions}", input=input_text,
                                context=request_context,
                                tools=schemas,
@@ -714,7 +894,8 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             signature = _action_signature(action)
             repeated = _recent_action_count(checkpoint_entries, history_key, signature)
             repair_without_write = (context.get("repair_round", 0) > 0
-                                    and action.tool_name != "write"
+                                    and not context.get("require_unit_submission")
+                                    and action.tool_name not in {"write", "replace"}
                                     and _repair_actions_without_write(checkpoint_entries, history_key)
                                     >= MAX_REPAIR_ACTIONS_WITHOUT_WRITE)
             # 阻止连续重复动作和返修中无写入循环。
@@ -738,6 +919,8 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             entry["result"] = tool_result.__dict__
             if context.get('require_unit_submission'):
                 entry['unit_versions_after'] = file_hashes(workspace_for(task), context['owned_files'])
+                # 读取进展与完成状态独立保存，检查点恢复后不重复发放相同范围进展。
+                entry['unit_read_information_progress'] = read_information_progress(entry, history, tools)
             history.append(entry)
             checkpoint_entries.append(entry)
             save_checkpoint(run, checkpoint_entries)
@@ -746,6 +929,17 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             db.commit()
             if tool_result.status == "succeeded" and stop_when and stop_when():
                 return 'SUBMITTED_FOR_TEST' if context.get('require_unit_submission') else result.text
+        if refresh_diagnostic is not None:
+            # 整批工具完成后才诊断，避免多处修改之间测试半成品；缓存及主动自测避免重复执行。
+            context = {**context, 'unit_diagnostic':refresh_diagnostic()}
+            if relay:
+                # 只有实际版本变化且诊断绑定当前完整版本时才能重建；通过诊断不等于交接。
+                current_versions = tools.self_test_versions()
+                diagnostic = context['unit_diagnostic']
+                if (batch_versions != current_versions and all(value is not None for value in current_versions.values())
+                        and diagnostic.get('file_hashes_before') == current_versions
+                        and diagnostic.get('file_hashes_after') == current_versions):
+                    relay.complete_batch(history, result.request_id, [action.call_id for action in result.actions], diagnostic)
     raise RuntimeError("model_call_limit_exceeded")
 
 
@@ -857,6 +1051,57 @@ def bug_verified_ready(db: Session, task: Task) -> bool:
             and json.loads(verified.read_text(encoding="utf-8")) == current)
 
 
+def saved_bug_inspections(tools: ToolRuntime, inspections: list[TraceRecord], current_hashes: dict) -> dict:
+    # 从不可变调查 Trace 恢复同路径同版本正文，缺失或损坏的记录不能证明当前内容。
+    saved = {}
+    for trace in inspections:
+        if trace.status != 'succeeded':
+            continue
+        path = trace.metadata_json['path']
+        saved.pop(path, None)
+        if trace.metadata_json['sha256'] != current_hashes.get(path):
+            continue
+        try:
+            # 只读取已保存的工具证据，不再调用产品文件 read。
+            detail = json.loads(tools._safe_path(trace.detail_path).read_text(encoding='utf-8'))['payload']
+            if (not isinstance(detail['content'], str) or detail['path'] != path or detail['sha256'] != current_hashes[path]
+                    or sha256_text(detail['content']) != current_hashes[path]):
+                continue
+            saved[path] = {'content':detail['content'], 'sha256':detail['sha256'],
+                           'evidence_ref':trace.detail_path, 'step_run_id':trace.step_run_id}
+        except (OSError, ValueError, KeyError, TypeError):
+            # 证据不可恢复时保留实际失败状态，不能把旧正文重新标为当前版本。
+            continue
+    return saved
+
+
+def bug_planner_protocol_errors(value: object, allowed: list[str], remaining_files: list[str],
+                                inspection_refs: dict) -> list[dict]:
+    # 给出实际拒绝字段与原因，供一次有界纠错使用，不代替模型选择行动。
+    if not isinstance(value, dict):
+        return [{'field':'response', 'code':'json_object_required', 'message':'回复必须是一个 JSON 对象。'}]
+    errors = []
+    action, path = value.get('action'), value.get('path')
+    if action not in allowed:
+        errors.append({'field':'action', 'code':'action_not_allowed',
+                       'message':f'当前阶段只允许 {allowed}；调查额度用尽时不能 inspect。'})
+    if not isinstance(value.get('reason'), str) or not value['reason'].strip():
+        errors.append({'field':'reason', 'code':'reason_required', 'message':'reason 必须是非空字符串。'})
+    if action == 'inspect' and path not in remaining_files:
+        reference = inspection_refs.get(path, {}) if isinstance(path, str) else {}
+        errors.append({'field':'path', 'code':'inspect_path_not_available',
+            'message':('该同版本路径在当前 Run 已调查，不能重复选择；可依据本次恢复的已存正文和当前门禁继续。'
+                       if reference.get('matches_current_file') else
+                       'path 必须来自 remaining_files；缺失、损坏或过期的调查正文不能作为当前证据。')})
+    if action != 'inspect' and path is not None:
+        errors.append({'field':'path', 'code':'unexpected_path', 'message':'非 inspect 行动的 path 必须为 null。'})
+    if action == 'clarify' and (not isinstance(value.get('clarifying_question'), str)
+                              or not value['clarifying_question'].strip()):
+        errors.append({'field':'clarifying_question', 'code':'question_required',
+                       'message':'clarify 必须给出一个非空的具体问题。'})
+    return errors
+
+
 def plan_bug_action(db: Session, task: Task, run: StepRun, tools: ToolRuntime) -> str:
     # 根据已确认的现有产品变更和真实执行结果规划下一行动，程序负责校验和执行。
     triage = active_bug_triage(task)
@@ -868,17 +1113,28 @@ def plan_bug_action(db: Session, task: Task, run: StepRun, tools: ToolRuntime) -
     if len(decisions) >= MAX_BUG_PLANNER_DECISIONS:
         raise RuntimeError("bug_planner_decision_limit_exceeded")
     inspections = [trace for trace in db.scalars(select(TraceRecord).where(
-        TraceRecord.task_id == task.id, TraceRecord.type == "bug_planner_inspect")).all()
+        TraceRecord.task_id == task.id, TraceRecord.type == "bug_planner_inspect")
+        .order_by(TraceRecord.sequence)).all()
                    if trace.metadata_json.get("event_id") == event_id]
     candidates = [f"evidence/{name}" for name in ("test-report.md", "verification-report.md")
                   if (root / "evidence" / name).is_file()]
     candidates += sorted(str(path.relative_to(root)) for path in (root / "product").rglob("*")
                          if path.is_file())
+    # 精简流程入口需要细节时沿用原 inspect 读取正式文档，不增加工具或额度。
+    compact_phase = task.cur_step in {Step.test, Step.start_product, Step.verify_product}
+    if compact_phase:
+        candidates += [f'docs/{name}' for name in ('product.md', 'architecture.md', 'dev-design.md')
+                       if (root / 'docs' / name).is_file()]
     previous_hashes = {**triage.get("inspected_evidence", {}),
                        **{trace.metadata_json["path"]: trace.metadata_json["sha256"]
                           for trace in inspections if trace.status == "succeeded"}}
-    remaining_files = [path for path in candidates if previous_hashes.get(path) !=
-                       hashlib.sha256((root / path).read_bytes()).hexdigest()]
+    current_hashes = {path:hashlib.sha256((root / path).read_bytes()).hexdigest() for path in candidates}
+    saved_inspections = saved_bug_inspections(tools, inspections, current_hashes)
+    # 跨 Run 允许请求恢复有效旧证据，当前 Run 同版本只提供一次；调查额度仍共用原上限。
+    reusable = {path for path, detail in saved_inspections.items()
+                if compact_phase and detail['step_run_id'] != run.id}
+    remaining_files = [path for path in candidates if previous_hashes.get(path) != current_hashes[path]
+                       or path in reusable]
     if task.cur_step == Step.develop:
         allowed = ["modify_code"]
     elif task.cur_step == Step.test:
@@ -901,12 +1157,12 @@ def plan_bug_action(db: Session, task: Task, run: StepRun, tools: ToolRuntime) -
     reports = {name: (root / "evidence" / name).read_text(encoding="utf-8")
                for name in ("test-report.md", "verification-report.md")
                if (root / "evidence" / name).is_file()}
-    inspected_content = {}
-    for trace in inspections[-MAX_BUG_EXTRA_INSPECTIONS:]:
-        detail = root / trace.detail_path
-        if detail.is_file() and trace.status == "succeeded":
-            inspected_content[trace.metadata_json["path"]] = json.loads(
-                detail.read_text(encoding="utf-8"))["payload"]["content"]
+    inspected_content = {path:detail['content'] for path, detail in saved_inspections.items()}
+    inspection_refs = {trace.metadata_json['path']:{'sha256':trace.metadata_json['sha256'],
+        'content_source':'inspection_trace', 'evidence_ref':trace.detail_path,
+        'matches_current_file':trace.metadata_json['path'] in saved_inspections,
+        'available_for_inspect':trace.metadata_json['path'] in reusable and 'inspect' in allowed}
+        for trace in inspections if trace.status == 'succeeded'}
     context = {"approved_documents": {name: (root / "docs" / name).read_text(encoding="utf-8")
                                       for name in ("product.md", "architecture.md", "dev-design.md")
                                       if (root / "docs" / name).is_file()},
@@ -915,52 +1171,87 @@ def plan_bug_action(db: Session, task: Task, run: StepRun, tools: ToolRuntime) -
                {"step": last_run.step.value, "status": last_run.status.value,
                 "error": last_run.error, "output_path": last_run.output_path} if last_run else None,
                "reports": reports, "code_hashes": product_code_hashes(task),
-               "inspected_content": inspected_content, "allowed_actions": allowed,
+               "inspected_content": inspected_content, "inspection_refs":inspection_refs, "allowed_actions": allowed,
                "remaining_files": remaining_files,
                "remaining_decisions": MAX_BUG_PLANNER_DECISIONS - len(decisions),
                "repair_round": task.repair_round}
+    if compact_phase:
+        from .repair_objectives import pending as repair_objectives_pending
+        # 上次 inspect 后的首个规划接收正文，后续动作依据当前门禁状态及引用。
+        last_decision_sequence = max((item.sequence for item in decisions), default=0)
+        fresh_paths = {item.metadata_json['path'] for item in inspections
+                       if item.sequence > last_decision_sequence and item.status == 'succeeded'}
+        context = compact_bug_planner_context(context, fresh_paths)
+        context['execution_state'] = {'step':task.cur_step.value, 'result_url':task.result_url,
+            'unresolved_objective_ids':[item['id'] for item in repair_objectives_pending(task)],
+            'suggested_action':allowed[0], 'user_feedback_role':'original_acceptance_feedback',
+            'phase_goal':{Step.test:'运行当前版本全量测试，原始缺陷待后续浏览器与目标审查验证。',
+                          Step.start_product:'当前版本测试门禁已通过，启动该版本并检查 HTTP 健康状态。',
+                          Step.verify_product:('当前验证与目标门禁已通过，选择 finish 交给用户验收。'
+                                               if allowed[0] == 'finish' else
+                                               '执行当前版本测试、真实浏览器及原目标独立审查。')}[task.cur_step]}
+        last_develop = db.scalar(select(StepRun).where(StepRun.task_id == task.id,
+            StepRun.step == Step.develop).order_by(StepRun.id.desc()).limit(1))
+        context['execution_state']['development_run'] = ({'id':last_develop.id,
+            'status':last_develop.status.value, 'output_path':last_develop.output_path} if last_develop else None)
+        # 适用性来自真实版本证据，不用旧报告的成功文字推断当前验证状态。
+        hashes = context['code_hashes']
+        context['current_evidence'] = {}
+        for key, path in (
+                ('tested_current', root / 'evidence/bug-tested-code-hashes.json'),
+                ('verified_current', root / 'evidence/bug-verified-code-hashes.json')):
+            try:
+                context['current_evidence'][key] = path.is_file() and json.loads(path.read_text(encoding='utf-8')) == hashes
+            except (OSError, ValueError):
+                # 不可读的可选摘要不证明版本有效，原正式门禁仍独立核验。
+                context['current_evidence'][key] = False
     for attempt in range(2):
         # Planner 只提出行动和证据目标，不接触工具；非法决定最多纠正一次。
         response = model_tool_loop(
             db, task, run,
-            """你是现有产品变更的 Next Action Planner。根据已确认变更、最近真实结果及调查证据，从 allowed_actions 中选择下一行动。不能跳过程序的测试、启动、浏览器和人工验收门径。只返回 JSON：action、path、reason、evidence_refs、clarifying_question；inspect 的 path 必须在 remaining_files 中；clarify 必须给出一个具体问题；其他行动的 path 为 null。""",
+            """你是现有产品变更的 Next Action Planner。根据已确认变更、最近真实结果及调查证据，从 allowed_actions 中选择下一行动。input 保存最初验收反馈，当前任务与证据适用性看 execution_state、current_evidence；不要把最初缺陷自动当作当前版本仍失败。优先依据当前门禁和 suggested_action 推进，需要具体新证据时才 inspect。inspect 的 path 必须在 remaining_files 中；inspection_refs.available_for_inspect=true 时程序恢复已存 Trace 正文，不重新读取该文件。当前 Run 已提供过的同版本正文不可再次 inspect。不能跳过程序的测试、启动、浏览器和人工验收门径。只返回 JSON：action、path、reason、evidence_refs、clarifying_question；clarify 必须给出一个具体问题；其他行动的 path 为 null。protocol_error.errors 给出拒绝字段和原因，纠错必须处理这些原因。""",
             triage["user_feedback"], context, tools, tool_schemas=[],
             history_key=f"bug_planner_{event_id}_{run.id}_{attempt}", runtime_step=Step.product_docs)
         try:
             value = json.loads(response.strip().removeprefix("```json").removeprefix("```")
                                .removesuffix("```").strip())
         except json.JSONDecodeError:
-            value = {}
-        if not isinstance(value, dict):
-            value = {}
-        action = value.get("action")
-        path = value.get("path")
-        valid = (action in allowed and isinstance(value.get("reason"), str)
-                 and bool(value["reason"].strip())
-                 and (action != "inspect" or path in remaining_files)
-                 and (action != "clarify" or isinstance(value.get("clarifying_question"), str)
-                      and bool(value["clarifying_question"].strip())))
-        if valid:
+            value = None
+        errors = bug_planner_protocol_errors(value, allowed, remaining_files, inspection_refs)
+        if not errors:
+            action, path = value['action'], value.get('path')
             safe_record_trace(db, task, run, "bug_planner_decision", "succeeded", "Bug 下一行动",
                               action, {"decision": value, "context": context},
                               {"event_id": event_id, "action": action, "path": path})
             if action == "inspect":
-                # 实际读取和内容哈希由程序产生，下一次规划将获得这份证据。
-                result = tools.execute(ToolCall(str(uuid.uuid4()), "read", {"path": path}))
-                if result.status != "succeeded" or result.output.get("truncated"):
-                    raise RuntimeError("bug_inspection_read_failed")
-                digest = hashlib.sha256((root / path).read_bytes()).hexdigest()
+                # 缓存恢复同样保存当前 Run 的调查记录，但不再次执行文件 read 或扩充调查额度。
+                if path in reusable:
+                    content, digest = saved_inspections[path]['content'], saved_inspections[path]['sha256']
+                    source_ref = saved_inspections[path]['evidence_ref']
+                else:
+                    result = tools.execute(ToolCall(str(uuid.uuid4()), "read", {"path": path}))
+                    if result.status != "succeeded" or result.output.get("truncated"):
+                        raise RuntimeError("bug_inspection_read_failed")
+                    content, digest = result.output['content'], hashlib.sha256((root / path).read_bytes()).hexdigest()
+                    source_ref = None
                 safe_record_trace(db, task, run, "bug_planner_inspect", "succeeded", "读取 Bug 证据",
-                                  path, {"path": path, "content": result.output["content"], "sha256": digest},
-                                  {"event_id": event_id, "path": path, "sha256": digest})
+                                  path, {"path": path, "content": content, "sha256": digest},
+                                  {"event_id": event_id, "path": path, "sha256": digest,
+                                   "content_source":"saved_inspection" if source_ref else "current_file",
+                                   "reused_from":source_ref})
             elif action == "clarify":
                 run.status = StepStatus.waiting_user
                 task.status = TaskStatus.waiting_user
                 add_message(db, task, "assistant", value["clarifying_question"])
             db.commit()
             return action
-        context["protocol_error"] = {"attempt": attempt + 1, "response": response,
-                                     "allowed_actions": allowed}
+        # 具体拒绝原因与有效旧正文一并交回，最多一次纠错，不执行非法决定。
+        path = value.get('path') if isinstance(value, dict) else None
+        if isinstance(path, str) and path in saved_inspections:
+            context['inspected_content'][path] = saved_inspections[path]['content']
+            context['inspection_refs'][path]['body_in_context'] = True
+        context["protocol_error"] = {"attempt": attempt + 1, "response": response, "errors":errors,
+                                     "allowed_actions": allowed, "remaining_files":remaining_files}
     raise RuntimeError("bug_planner_protocol_failed")
 
 
@@ -1765,7 +2056,12 @@ def free_port() -> int:
 def handle_start(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     # 启动生成软件并检查 HTTP 健康状态。
     port = free_port()
-    command = f"python -m http.server {port} --bind 127.0.0.1"
+    # 在服务子进程中扩大监听队列，避免模块并发建连填满标准库默认的五个位置。
+    bootstrap = ("import runpy,socketserver,sys;"
+                 "socketserver.TCPServer.request_queue_size=128;"
+                 f"sys.argv=['http.server','{port}','--bind','127.0.0.1'];"
+                 "runpy.run_module('http.server',run_name='__main__')")
+    command = f'python -c "{bootstrap}"'
     result = execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec", {"action": "start", "command": command}))
     if result.status != "succeeded" or not result.output.get("running"):
         fail_or_repair(db, task, run, result.error or "product_start_failed")
@@ -2000,6 +2296,7 @@ def parse_acceptance_action(value: dict) -> dict:
 
 def plan_acceptance_action(db: Session, task: Task, run: StepRun, feedback: str,
                            approved_documents: dict, candidates: list[str]) -> tuple[dict, dict]:
+    """有界调查正式文件及产品片段，保留范围后决定验收反馈处理阶段。"""
     # 同一个 Planner 按反馈连续调查证据，然后直接选择文档、代码或澄清行动。
     root = workspace_for(task)
     inspected: dict = {}
@@ -2007,15 +2304,19 @@ def plan_acceptance_action(db: Session, task: Task, run: StepRun, feedback: str,
     protocol_error = None
     invalid_count = 0
     for index in range(6):
-        remaining = [path for path in candidates if path not in inspected]
+        remaining = [path for path in candidates if path not in inspected
+                     or not inspected[path].get("complete", True)]
+        if len(inspected) >= 3:
+            remaining = [path for path in remaining if path in inspected]
         allowed = ["clarify", *ACCEPTANCE_ACTIONS]
-        if remaining and len(inspected) < 3:
+        if remaining:
             allowed.insert(0, "inspect")
         # Planner 不接触工具；所有正式文档和已读取证据在下一轮规划中继续可见。
         response = model_tool_loop(
             db, task, run,
             """你是已有产品验收反馈的 Next Action Planner。用户描述只是线索；对照实际存在的正式文档、明确保存的设计跳过依据和已调查证据，直接决定下一行动。被跳过的文档不是空白正式设计；若新问题表明必须补设计，可选择对应更新。若要判断代码实现缺陷，先 inspect 相关产品代码；证据不足可继续 inspect 或 clarify。只返回一个 JSON 对象：action、path、reason、evidence、changes、confidence、clarifying_question。inspect 是返回给程序的 JSON 行动，不是真实工具调用；例如 {"action":"inspect","path":"product/app.js","reason":"核对页面操作","evidence":[],"changes":[],"confidence":0.8,"clarifying_question":null}。不要输出 tool_call、tool_calls、Markdown 或代码块。action 必须在 allowed_actions 中；inspect 的 path 必须在 remaining_files 中，其他行动的 path 为 null。编号反馈逐条解释，选择所有条目中最早失效的行动。改变或新增产品可见行为选 update_requirement；需求不变但架构决策缺失或冲突选 update_architecture；架构成立但实现细节设计必须补充或冲突选 update_dev_design；正式需求和现有设计或跳过依据均支持期望行为而代码不符才选 modify_code。不能只凭“缺陷”一词认定代码问题，不能把用户描述的现状当期望。update_requirement 的 changes 每项须含 current_behavior、expected_behavior 和非空 acceptance_examples；clarify 须只提出一个具体问题。不得写文件或执行命令。""",
             feedback, {"approved_documents": approved_documents, "remaining_files": remaining,
+                       "inspection_contract": "inspect 支持 start_line、end_line，默认先读 200 行；证据标注范围与 next_line，禁止重复读已调查范围。",
                        "skipped_design": skipped_design_evidence(task),
                        "inspected_files": inspected, "allowed_actions": allowed,
                        "protocol_error": protocol_error,
@@ -2033,22 +2334,51 @@ def plan_acceptance_action(db: Session, task: Task, run: StepRun, feedback: str,
             decision = {}
         action = decision.get("action")
         path = decision.get("path")
-        if action == "inspect" and path in remaining and len(inspected) < 3:
+        if action == "inspect" and path in remaining and (path in inspected or len(inspected) < 3):
             # 工具再次解析目标路径，拒绝清单外文件和符号链接逃逸。
-            result = tools.execute(ToolCall(call_id=str(uuid.uuid4()), tool_name="read", parameters={"path": path}))
-            if result.status != "succeeded" or result.output.get("truncated"):
+            prior = inspected.get(path)
+            start = decision.get("start_line", prior["next_line"] if prior else 1)
+            end = decision.get("end_line", start + 199 if type(start) is int else None)
+            # 分段调查只允许未读范围，避免大文件截断后重复读取全文。
+            if (type(start) is not int or type(end) is not int or start < 1 or end < start
+                    or end - start >= 200 or (prior and (start < prior["next_line"]
+                    or [start, end] in prior["requested_ranges"]))):
+                protocol_error = {"message": "范围无效或重复；从 next_line 开始，最多读取 200 行。"}
+                continue
+            result = tools.execute(ToolCall(call_id=str(uuid.uuid4()), tool_name="read",
+                                           parameters={"path": path, "start_line": start, "end_line": end}))
+            if result.status != "succeeded":
                 safe_record_trace(db, task, run, "acceptance_inspect", "failed", "证据读取失败",
                                   str(path), {"error": result.error, "truncated": result.output.get("truncated")})
-                break
+                protocol_error = {"message": "证据读取失败，请选择其他证据。", "error": result.error}
+                continue
             digest = hashlib.sha256((root / path).read_bytes()).hexdigest()
-            inspected[path] = {"content": result.output["content"], "sha256": digest}
+            output = result.output
+            content = output["content"]
+            # 字节截断时仅登记完整行，未返回的行仍需后续调查。
+            if output["truncated"]:
+                content = content[:content.rfind("\n") + 1] if "\n" in content else ""
+            next_line = start + len(content.splitlines())
+            fragments = (prior["fragments"] if prior else []) + [
+                {"start_line": start, "end_line": next_line - 1,
+                 "content": content, "truncated": output["truncated"]}]
+            inspected[path] = {"content": "\n".join(item["content"] for item in fragments),
+                               "sha256": digest, "fragments": fragments,
+                               "requested_ranges": (prior["requested_ranges"] if prior else []) + [[start, end]],
+                               "total_lines": output["total_lines"], "next_line": next_line,
+                               "complete": (not output["truncated"] and next_line > output["total_lines"]
+                                            and fragments[0]["start_line"] == 1
+                                            and all(a["end_line"] + 1 == b["start_line"]
+                                                    for a, b in zip(fragments, fragments[1:])))}
+            protocol_error = {"message": "证据为标注范围的片段；inspect 可提供 start_line、end_line；从 next_line 继续，最多 200 行。"}
             safe_record_trace(db, task, run, "acceptance_inspect", "succeeded", "读取验收证据",
-                              path, {"path": path, "sha256": digest, "content": result.output["content"]},
-                              {"path": path, "sha256": digest})
+                              path, {"path": path, "sha256": digest, "fragment": fragments[-1]},
+                              {"path": path, "sha256": digest, "start_line": start,
+                               "end_line": next_line - 1, "truncated": output["truncated"]})
             continue
         # 文档变更可依正式文件直接判断；实现缺陷必须有实际读取的产品代码证据。
         code_inspected = any(path.startswith("product/") and Path(path).suffix in {
-            ".html", ".css", ".js", ".py"} for path in inspected)
+            ".html", ".css", ".js", ".py"} and inspected[path]["content"] for path in inspected)
         if action in {"clarify", *ACCEPTANCE_ACTIONS} and action in allowed \
                 and (action != "modify_code" or code_inspected):
             parsed = parse_acceptance_action(decision)

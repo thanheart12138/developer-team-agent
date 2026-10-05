@@ -5,10 +5,14 @@ import os
 from pathlib import Path
 import shutil
 import sys
+from experiment_storage import experiment_path, prepare_experiment_root, read_call_count, save_call_count
 
-source = Path(sys.argv[1])
-root = Path(sys.argv[2])
+source = prepare_experiment_root('tool-summary-resume-', sys.argv[1], resume=True)
+root = experiment_path(sys.argv[2])
+if source == root or source in root.parents:
+    raise ValueError('experiment_copy_destination_inside_source')
 shutil.copytree(source, root)
+root = prepare_experiment_root('tool-summary-resume-', root, resume=True)
 os.environ['SIMULATOR_DATABASE_URL'] = f'sqlite+pysqlite:///{root}/test.db'
 os.environ['SIMULATOR_WORKSPACE_ROOT'] = str(root / 'workspace')
 
@@ -41,7 +45,7 @@ def bounded_payload(runtime, request):
 
 
 model.DeepSeekRuntime.build_payload = bounded_payload
-calls = json.loads((source / 'call-count.json').read_text())
+calls = read_call_count(root)
 prior_calls = calls
 original_stream = httpx.Client.stream
 
@@ -53,7 +57,7 @@ def bounded_stream(client, method, url, **kwargs):
         if calls >= 200:
             raise RuntimeError('shared_http_budget_200_exceeded')
         calls += 1
-        (root / 'call-count.json').write_text(json.dumps(calls))
+        save_call_count(root, calls)
         (root / 'sent-requests' / f'{calls:03d}.json').write_text(json.dumps(sanitize(kwargs['json']), ensure_ascii=False, indent=2))
         print('MODEL_HTTP', calls, flush=True)
     return original_stream(client, method, url, **kwargs)

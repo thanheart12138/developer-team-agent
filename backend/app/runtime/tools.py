@@ -2,6 +2,7 @@ import os
 import hashlib
 import signal
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -121,13 +122,15 @@ class ToolRuntime:
 
     def _exec(self, action: str, command: str | None = None, process_id: int | None = None) -> dict:
         # 运行命令或管理生成软件的后台进程。
+        # 子进程沿用 Worker 的 Python 环境，避免 Node 再调用系统 Python 丢失 Playwright。
+        environment = {**os.environ, "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")}
         if action == "run":
             if not command:
                 raise ValueError("command_required")
             try:
                 # 同步命令受时间和输出长度限制。
                 result = subprocess.run(command, cwd=self.product, shell=True, capture_output=True,
-                                        timeout=COMMAND_TIMEOUT)
+                                        timeout=COMMAND_TIMEOUT, env=environment)
                 stdout, stdout_cut = self._limited(result.stdout)
                 stderr, stderr_cut = self._limited(result.stderr)
                 return {"exit_code": result.returncode, "stdout": stdout, "stderr": stderr,
@@ -146,7 +149,7 @@ class ToolRuntime:
                 "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
             # 后台启动生成软件并登记进程，以便状态查询和停止。
             process = subprocess.Popen(command, cwd=self.product, shell=True, stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL, **process_options)
+                                       stderr=subprocess.DEVNULL, env=environment, **process_options)
             self._processes[process.pid] = process
             return {"exit_code": None, "stdout": "", "stderr": "", "timed_out": False,
                     "truncated": False, "process_id": process.pid, "running": process.poll() is None}
@@ -178,9 +181,10 @@ class ToolRuntime:
 
 
 TOOL_SCHEMAS = [
-    {"type": "function", "function": {"name": "read", "description": "Read a workspace file, optionally by an inclusive line range",
+    {"type": "function", "function": {"name": "read", "description": "Read a workspace file. For an inclusive line range, provide BOTH start_line and end_line; otherwise omit BOTH. end_line must be >= start_line.",
      "parameters": {"type": "object", "properties": {"path": {"type": "string"},
-      "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}},
+      "start_line": {"type": "integer", "minimum": 1, "description": "First line, 1-based; requires end_line."},
+      "end_line": {"type": "integer", "minimum": 1, "description": "Last line, inclusive; requires start_line and must be >= it."}},
       "required": ["path"]}}},
     {"type": "function", "function": {"name": "write", "description": "Atomically create or replace a workspace file",
      "parameters": {"type": "object", "properties": {"path": {"type": "string"},

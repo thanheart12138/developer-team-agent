@@ -1,0 +1,582 @@
+{
+  "date": "2026-10-02",
+  "scope": "用户授权三项请求上下文精简；机制回归与旧真实请求正文离线回放，不新增模型调用",
+  "model_http_calls": 0,
+  "model_tokens": 0,
+  "code_sha256": {
+    "backend/app/runtime/model.py": "33a61005a45963d4482470af85e6777247916f2cecaff84eb47ba1c9f40e64fe",
+    "backend/app/runtime/context_relay.py": "2dac5194901eb56d4b6ee39686d081830916f43983a8328e95d412b10587d4d6",
+    "backend/app/runtime/slice_workflow.py": "ef273f1092b055a9bcfd42ef04932c8e48a782e5aeb6508ce20d13ccaa78d832",
+    "backend/app/runtime/worker.py": "f73dc42993a03c5ac32f444a8c7baed20605c19226ebfb31af310717da08491f",
+    "tests/test_context_slimming.py": "53f7b99c24e7b54dff5e723e193296b3c08267fcfc2be4c964eb1032a5bc4ebe"
+  },
+  "tests": {
+    "initial_command": ".venv/bin/python -m pytest -q tests/test_context_slimming.py tests/test_context_relay.py tests/test_model_runtime.py tests/test_worker_events.py tests/test_slice_workflow.py tests/test_unit_workflow.py tests/test_tool_summaries.py",
+    "initial_passed": 225,
+    "initial_failed": 2,
+    "initial_total": 227,
+    "initial_failure_reason": "两个新增用例未启用 UnitTools submission_files，实际先拒绝 unit_submission_not_allowed；修正测试夹具后验证预期自测门禁",
+    "final_targeted_command": ".venv/bin/python -m pytest -q tests/test_context_slimming.py --disable-warnings",
+    "final_targeted_passed": 11,
+    "final_targeted_failed": 0,
+    "last_fix": "旧报告正文改引用后，current_task.latest_evidence.integration_failure_ref 同步指向 unit_test_feedback.detail_path，新增断言通过",
+    "verification_limits": "没有在最后定向验证后再执行全部 227 项，不能将 225 和 11 相加为互不重复用例",
+    "python_compile_passed": true,
+    "git_diff_check_passed": true,
+    "launcher_note": "直接 .venv/bin/pytest 的旧绝对路径 shebang 报 127，未执行测试；改用当前 .venv/bin/python -m pytest，不修改系统或虚拟环境配置"
+  },
+  "replay": {
+    "http_calls": 0,
+    "records": [
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/001.json",
+        "trace_sequence": 1136,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 48996,
+        "projected_payload_chars": 48996,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/002.json",
+        "trace_sequence": 1139,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 72094,
+        "projected_payload_chars": 72094,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/003.json",
+        "trace_sequence": 1142,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 78413,
+        "projected_payload_chars": 78413,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/004.json",
+        "trace_sequence": 1145,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 88487,
+        "projected_payload_chars": 88487,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/005.json",
+        "trace_sequence": 1148,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 88546,
+        "projected_payload_chars": 88546,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/006.json",
+        "trace_sequence": 1154,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 49706,
+        "projected_payload_chars": 49706,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/007.json",
+        "trace_sequence": 1157,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 72804,
+        "projected_payload_chars": 72804,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/008.json",
+        "trace_sequence": 1160,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 82891,
+        "projected_payload_chars": 82891,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/009.json",
+        "trace_sequence": 1163,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 86277,
+        "projected_payload_chars": 86277,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/010.json",
+        "trace_sequence": 1166,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 75435,
+        "projected_payload_chars": 75435,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/011.json",
+        "trace_sequence": 1171,
+        "model": "kimi-for-coding",
+        "changes": [],
+        "original_payload_chars": 62929,
+        "projected_payload_chars": 62929,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/012.json",
+        "trace_sequence": 1176,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference"
+        ],
+        "original_payload_chars": 43754,
+        "projected_payload_chars": 22402,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/013.json",
+        "trace_sequence": 1184,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference"
+        ],
+        "original_payload_chars": 68839,
+        "projected_payload_chars": 47487,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/014.json",
+        "trace_sequence": 1190,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference"
+        ],
+        "original_payload_chars": 82602,
+        "projected_payload_chars": 61250,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/015.json",
+        "trace_sequence": 1196,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference"
+        ],
+        "original_payload_chars": 93209,
+        "projected_payload_chars": 71857,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/016.json",
+        "trace_sequence": 1204,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference"
+        ],
+        "original_payload_chars": 140907,
+        "projected_payload_chars": 119555,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/017.json",
+        "trace_sequence": 1210,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference"
+        ],
+        "original_payload_chars": 166547,
+        "projected_payload_chars": 145195,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/018.json",
+        "trace_sequence": 1216,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference"
+        ],
+        "original_payload_chars": 193001,
+        "projected_payload_chars": 171649,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/019.json",
+        "trace_sequence": 1220,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference"
+        ],
+        "original_payload_chars": 205930,
+        "projected_payload_chars": 184578,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/020.json",
+        "trace_sequence": 1224,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference"
+        ],
+        "original_payload_chars": 216958,
+        "projected_payload_chars": 195606,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/021.json",
+        "trace_sequence": 1232,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 173945,
+        "projected_payload_chars": 53662,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/022.json",
+        "trace_sequence": 1239,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 191238,
+        "projected_payload_chars": 70955,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/023.json",
+        "trace_sequence": 1245,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 232716,
+        "projected_payload_chars": 112433,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-feedback-repair-20261002-ur4suwp2/sent-requests/024.json",
+        "trace_sequence": 1249,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 239557,
+        "projected_payload_chars": 119274,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/001.json",
+        "trace_sequence": 1264,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 200256,
+        "projected_payload_chars": 158100,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/002.json",
+        "trace_sequence": 1271,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 208404,
+        "projected_payload_chars": 166248,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/003.json",
+        "trace_sequence": 1275,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 243851,
+        "projected_payload_chars": 201695,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/004.json",
+        "trace_sequence": 1293,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 201768,
+        "projected_payload_chars": 139622,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/005.json",
+        "trace_sequence": 1299,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 214409,
+        "projected_payload_chars": 152263,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/006.json",
+        "trace_sequence": 1305,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 206113,
+        "projected_payload_chars": 69885,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/007.json",
+        "trace_sequence": 1311,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 218779,
+        "projected_payload_chars": 82551,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/008.json",
+        "trace_sequence": 1317,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources"
+        ],
+        "original_payload_chars": 206641,
+        "projected_payload_chars": 35858,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/009.json",
+        "trace_sequence": 1321,
+        "model": "deepseek-flash",
+        "changes": [
+          "historical_report_reference",
+          "goal_historical_evidence_reference",
+          "focused_known_sources",
+          "self_test_protocol_reference"
+        ],
+        "original_payload_chars": 239425,
+        "projected_payload_chars": 61521,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/010.json",
+        "trace_sequence": 1330,
+        "model": "kimi-for-coding",
+        "changes": [
+          "compact_flow_planner"
+        ],
+        "original_payload_chars": 62999,
+        "projected_payload_chars": 6484,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/011.json",
+        "trace_sequence": 1334,
+        "model": "kimi-for-coding",
+        "changes": [
+          "compact_flow_planner"
+        ],
+        "original_payload_chars": 86249,
+        "projected_payload_chars": 29917,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-test-handoff-20261002-ig6q8gdn/sent-requests/012.json",
+        "trace_sequence": 1343,
+        "model": "kimi-for-coding",
+        "changes": [
+          "compact_flow_planner"
+        ],
+        "original_payload_chars": 86263,
+        "projected_payload_chars": 6635,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-objective-finish-20261002-_kcfyx7s/sent-requests/001.json",
+        "trace_sequence": 1357,
+        "model": "kimi-for-coding",
+        "changes": [
+          "compact_flow_planner"
+        ],
+        "original_payload_chars": 86266,
+        "projected_payload_chars": 6640,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-objective-finish-20261002-_kcfyx7s/sent-requests/002.json",
+        "trace_sequence": 1364,
+        "model": "deepseek-flash",
+        "changes": [],
+        "original_payload_chars": 62400,
+        "projected_payload_chars": 62400,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      },
+      {
+        "source": "/private/tmp/content-platform-objective-finish-20261002-_kcfyx7s/sent-requests/003.json",
+        "trace_sequence": 1370,
+        "model": "kimi-for-coding",
+        "changes": [
+          "compact_flow_planner"
+        ],
+        "original_payload_chars": 86590,
+        "projected_payload_chars": 6646,
+        "original_protocol_unchanged": true,
+        "original_goal_facts_unchanged": true
+      }
+    ],
+    "sample_count": 39,
+    "original_payload_chars": 5266194,
+    "projected_payload_chars": 3368946,
+    "body_projection_reduction_percent": 36.03,
+    "protocol_unchanged": true,
+    "original_goal_facts_unchanged": true,
+    "method_limits": [
+      "只投影已保存正文；不含新 Planner 状态字段、文档候选及新增运行指令的少量开销",
+      "旧报告引用为独立副本，不修改源任务，不能视为真实新模型完成能力",
+      "字符数量不是实际 Token 或账单节省，模型后续读取和行为尚未验证"
+    ]
+  },
+  "worker_restart": {
+    "model_http_calls": 0,
+    "model_tokens": 0,
+    "old_worker_pid": 92087,
+    "failure": null,
+    "formal_before": {
+      "trace_count": 16908,
+      "pending_events": 0,
+      "running_tasks": 0,
+      "pending_tasks": 0,
+      "task_count": 24
+    },
+    "formal_snapshot_sha256": "00988fc3111af9e71b54454727f21afc54404916d4740012a2e787aff68d1585",
+    "new_worker_pid": 73713,
+    "initial_validation_failure": {
+      "type": "AssertionError",
+      "cause": "lsof 将 3306 显示为 mysql，数字端口字符串断言误判；Worker 已正常启动并连接数据库",
+      "correction": "使用 lsof -P，只读复核同一新 PID，没有再次重启"
+    },
+    "formal_after": {
+      "trace_count": 16908,
+      "pending_events": 0,
+      "running_tasks": 0,
+      "pending_tasks": 0,
+      "task_count": 24
+    },
+    "formal_snapshot_unchanged": true,
+    "isolated_task": [
+      "waiting_acceptance",
+      "verify_product",
+      73,
+      31445,
+      "http://127.0.0.1:61626"
+    ],
+    "isolated_trace_count": 1373,
+    "product_file_count": 20,
+    "product_hashes_unchanged": true,
+    "service_pid": 31445,
+    "service_http_status": 200,
+    "worker_alive": true,
+    "worker_database_connected": true,
+    "service_restarted": false
+  },
+  "temporary_probe_root": "/private/tmp/request-context-slimming-20261002-g33o9ua0",
+  "remaining_unverified": [
+    "真实模型在新上下文下的完成效果",
+    "实际输入／输出／总 Token 与账单收益",
+    "稳定成功率和从零无人干预交付",
+    "最终用户验收"
+  ],
+  "safety": {
+    "source_task_not_resumed": true,
+    "generated_product_not_modified": true,
+    "formal_schema_not_changed": true,
+    "credentials_not_written": true,
+    "git_commit_or_push": false
+  },
+  "record_completed_date": "2026-10-03"
+}

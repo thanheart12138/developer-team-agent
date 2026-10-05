@@ -1,0 +1,113 @@
+{
+  "status": "blocked_before_first_model_http_by_auto_review",
+  "source_task_id": 26,
+  "formal_unchanged": {
+    "state_sha256": true,
+    "schema_sha256": true,
+    "file_status_sha256": true,
+    "product_hashes_sha256": true
+  },
+  "source_workspace_unchanged": true,
+  "old_run_counts_preserved": true,
+  "isolated_sqlite_quick_check": "ok",
+  "control_script_syntax": "pass",
+  "independent_node_baseline": {
+    "failed": 3
+  },
+  "original_generated_node_tests": {
+    "passed": 23,
+    "failed": 0,
+    "transcript": "Original read-only terminal run; baseline independent failures retained in baseline-node.txt."
+  },
+  "independent_browser_baseline": {
+    "url": "http://127.0.0.1:60354",
+    "checks": [
+      {
+        "operation": "1.245 + 0",
+        "expected": "1.25",
+        "actual": "1.24",
+        "passed": false
+      },
+      {
+        "operation": "1.225 + 0",
+        "expected": "1.23",
+        "actual": "1.22",
+        "passed": false
+      },
+      {
+        "operation": "1.005 + 0",
+        "expected": "1.01",
+        "actual": "1.00",
+        "passed": false
+      },
+      {
+        "operation": "5 ÷ 0",
+        "expected": "无法计算（除数不能为 0）",
+        "actual": "无法计算（除数不能为 0）",
+        "passed": true
+      },
+      {
+        "operation": "除零错误后直接输入 2 + 3",
+        "expected": "5.00",
+        "actual": "5.00",
+        "passed": true
+      }
+    ],
+    "page_errors": [],
+    "default_chromium_executable_exists": false,
+    "passed": 2,
+    "failed": 3
+  },
+  "environment_adaptation": {
+    "phase": "before_model_test",
+    "file": "product/verify_product.py",
+    "reason": "Default Playwright Chromium executable is missing; installed system Chrome is available.",
+    "change": "Only chromium.launch(channel=\"chrome\"); business code and assertions unchanged.",
+    "before_sha256": "832742077011b52f861444f62ee125043eb799e9796f3fa40209633fe74db576",
+    "after_sha256": "3ab2e10127ef775756d3b55aca5cdeb3568a1daaba3cebcda1e9e89e7ecc620a",
+    "browser_or_dependency_installed": false,
+    "model_http_calls": 0
+  },
+  "program_reproduction": {
+    "status": "running",
+    "step": "develop",
+    "repair_round": 1,
+    "model_http_calls": 0,
+    "description": "Only program Node validation executed; original Worker naturally entered repair after three requirement regressions failed."
+  },
+  "auto_review": {
+    "attempted_action": "Send Task26 task documents, code and evidence to DeepSeek for at most six model HTTP repair calls.",
+    "auto_review": "rejected",
+    "reason": "Specific Task26 payload and DeepSeek destination lacked explicit authorization in trusted user content.",
+    "command_executed": false,
+    "model_http_calls": 0,
+    "budget_consumed": 0,
+    "bypass_attempted": false,
+    "pending": "User explicit approval of this specific external disclosure."
+  },
+  "outbound_scope": {
+    "provider": "DeepSeek",
+    "model": "deepseek-flash",
+    "thinking": "enabled",
+    "purpose": "Repair the three reproduced rounding boundaries under approved requirement 5.3.",
+    "actual_http_limit": 6,
+    "includes_retries": true,
+    "data_categories": [
+      "Task26 approved product/architecture and skip-design decision",
+      "Task26 product source, Node and browser test scripts",
+      "Task26 failure reports, file versions and task tool history"
+    ],
+    "authentication": "Existing controlled key file; key content and HTTP authentication headers excluded from the model context and saved payload.",
+    "formal_task_mutation": false,
+    "legacy_explicit_submission_available": false
+  },
+  "model_http_calls": 0,
+  "model_tokens": 0,
+  "paid_budget_consumed": 0,
+  "real_model_repair_executed": false,
+  "independent_after_repair_validation_executed": false,
+  "new_slice_explicit_handoff_verified": false,
+  "old_content_platform_recreated": false,
+  "user_acceptance_completed": false,
+  "persistent_root": "/Users/aideihua/project/ai-agent-product/workspace/experiments/calculator-rounding-repair-20261003-nbuuvlks"
+}

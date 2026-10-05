@@ -4,14 +4,14 @@ import json
 import os
 from pathlib import Path
 import sys
+from experiment_storage import prepare_experiment_root, read_call_count, save_call_count
 
-root = Path(sys.argv[1])
-baseline = Path(sys.argv[2])
-prior_calls = json.loads((baseline / 'call-count.json').read_text())
+baseline = prepare_experiment_root('historical-query-', sys.argv[2], resume=True)
+prior_calls = read_call_count(baseline)
 limit = min(8, 200 - prior_calls)
 if limit <= 0:
     raise RuntimeError('shared_http_budget_exhausted')
-root.mkdir(parents=True, exist_ok=True)
+root = prepare_experiment_root('historical-query-', sys.argv[1])
 os.environ['SIMULATOR_DATABASE_URL'] = f'sqlite+pysqlite:///{root}/test.db'
 os.environ['SIMULATOR_WORKSPACE_ROOT'] = str(root / 'workspace')
 
@@ -36,7 +36,7 @@ def bounded_stream(client, method, url, **kwargs):
         if calls >= limit:
             raise RuntimeError('probe_http_budget_exhausted')
         calls += 1
-        (root / 'call-count.json').write_text(json.dumps(calls))
+        save_call_count(root, calls)
         (root / f'sent-{calls:03d}.json').write_text(json.dumps(sanitize(kwargs['json']), ensure_ascii=False, indent=2))
         print('MODEL_HTTP', calls, flush=True)
     return original_stream(client, method, url, **kwargs)
