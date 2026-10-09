@@ -58,6 +58,20 @@ def record_blocker(task, reason: str) -> None:
     w.write_json_atomic(root / PATH, ledger)
 
 
+def accept_by_user(task, event_id: int) -> None:
+    """仅用户已批准的当前提交关闭原始目标，保留历史模型审查记录。"""
+    from . import worker as w
+    root = w.workspace_for(task)
+    ledger = load(root)
+    hashes = w.product_code_hashes(task)
+    # 用户批准覆盖当前待确认目标，记录明确来源，不伪造模型覆盖结果。
+    for item in ledger['items']:
+        if item['status'] != 'closed' or item.get('verified_hashes') != hashes:
+            item.update(status='closed', verified_hashes=hashes,
+                        verification_source='user_acceptance', acceptance_event_id=event_id)
+    w.write_json_atomic(root / PATH, ledger)
+
+
 def verify(db, task, run, tools, browser_result) -> bool:
     """真实浏览器成功后，独立核对每个原始目标的操作与断言依据。"""
     from . import worker as w
@@ -69,11 +83,17 @@ def verify(db, task, run, tools, browser_result) -> bool:
     root = w.workspace_for(task)
     script = (root / "product/verify_product.py").read_text(encoding="utf-8")
     hashes = w.product_code_hashes(task)
+    from .repair_runtime import load as load_repair
+    repair = load_repair(root)
+    test_diff = {}
+    if repair and repair.get('submission_ref'):
+        # 审查同时看到原测试差异，避免只凭修改后的通过结果核销目标。
+        test_diff = json.loads((root / repair['submission_ref']).read_text()).get('test_diff', {})
     response = w.model_tool_loop(
         db, task, run, load_prompt("repair-objective-reviewer"),
         "核对原始验收目标是否在这次实际执行的浏览器脚本中得到验证。",
         {"objectives": objectives, "browser_script": script,
-         "actual_browser_result": browser_result.__dict__}, tools, tool_schemas=[],
+         "actual_browser_result": browser_result.__dict__, 'test_diff_from_original': test_diff}, tools, tool_schemas=[],
         history_key=f"repair-objectives:{run.id}:{w.content_hash(script)[:12]}")
     try:
         review = json.loads(response.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())

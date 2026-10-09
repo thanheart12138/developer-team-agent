@@ -1,11 +1,13 @@
 import json
 import os
+from pathlib import Path
 
 import httpx
 from sqlalchemy.orm import Session
 
 from ..config import get_deepseek_api_key, get_kimi_api_key, get_openrouter_api_key, settings
-from ..models import Message, Step
+from ..models import Message, Step, Task
+from .repair_runtime import reserve_request, finish_request
 from .contracts import ModelRequest, ModelResult, ToolCall
 
 
@@ -46,6 +48,33 @@ def build_messages(request: ModelRequest, include_reasoning: bool = False) -> li
                     and self_test.get("passed") == output.get("passed")):
                 context["unit_self_test"] = {key: value for key, value in self_test.items() if key != "result"} | {
                     "result_ref": {"call_id": action["call_id"], "content_source": "tool_message"}}
+                break
+    facts = context.get("current_task_facts")
+    if isinstance(facts, dict) and facts.get("contract") == "v2":
+        evidence = facts.get("self_test", {}).get("evidence")
+        ref = evidence.get("result_ref", {}) if isinstance(evidence, dict) else {}
+        for entry in tool_history:
+            action, result = entry.get("action", {}), entry.get("result", {})
+            output = result.get("output", {})
+            if (action.get("tool_name") == "run_unit_tests" and result.get("status") == "succeeded"
+                    and ref.get("model_call_id") and ref.get("tool_call_id")
+                    and entry.get("model_request_id") == ref["model_call_id"]
+                    and action.get("call_id") == ref["tool_call_id"]
+                    and all(evidence.get(key) == output.get(key) for key in (
+                        "command", "file_hashes_before", "file_hashes_after", "passed", "result", "failure_details"))):
+                # 身份和正文均一致才引用实际工具消息；接力没有该消息时保留完整事实。
+                result_ref = {**ref, "content_source": "tool_message"}
+                compact = {key: value for key, value in evidence.items() if key not in {"result", "failure_details"}}
+                compact["result_ref"] = result_ref
+                context["current_task_facts"] = {**facts, "self_test": {**facts["self_test"], "evidence": compact}}
+                # 只收敛同一次自测的重复失败，不隐藏其他工具故障或未知旧摘要。
+                context["tool_failures"] = [
+                    {**{key: value for key, value in item.items() if key != "error_excerpt"},
+                     "error_ref": result_ref}
+                    if item.get("tool_name") == "run_unit_tests"
+                    and item.get("parent_model_call_id") == ref["model_call_id"]
+                    and item.get("tool_call_id") == ref["tool_call_id"] else item
+                    for item in context.get("tool_failures", [])]
                 break
     messages = [
         {"role": "system", "content": request.instructions},
@@ -156,6 +185,9 @@ class ChatCompletionsRuntime:
         reasoning_parts = []
         tools_by_index: dict[int, dict] = {}
         metadata = {}
+        task = self.db.get(Task, task_id)
+        budget_root = Path(task.workspace_path) if task and task.workspace_path else None
+        attempt = None
 
         def merged_response() -> dict:
             # 汇总文本、完整工具参数和响应元信息，不保留原始分片。
@@ -169,6 +201,9 @@ class ChatCompletionsRuntime:
             if proxy_url:
                 client_options["proxy"] = proxy_url
             with httpx.Client(**client_options) as client:
+                # 每次实际发送（含重试）先登记任务预算，旧任务没有新状态时保持原行为。
+                if budget_root:
+                    attempt = reserve_request(budget_root, self.provider, request.request_id)
                 # 认证头只用于传输，不进入审计响应。
                 with client.stream("POST", f"{self.base_url.rstrip('/')}/chat/completions",
                                    headers={"Authorization": f"Bearer {api_key}"}, json=payload) as response:
@@ -211,12 +246,18 @@ class ChatCompletionsRuntime:
                             target["function"]["arguments"] += function.get("arguments") or ""
         except httpx.HTTPError as exc:
             # 传输中断仍携带部分文本和工具参数，由 Worker 归档一次。
+            if budget_root:
+                finish_request(budget_root, attempt, "failed", metadata.get("usage"))
             exc.response_body = merged_response()
             raise
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             # 无法解析的流归入协议错误，保存已合并内容而不保存原始事件。
+            if budget_root:
+                finish_request(budget_root, attempt, "failed", metadata.get("usage"))
             raise ModelProtocolError("invalid_stream_response", merged_response()) from exc
         merged = merged_response()
+        if budget_root:
+            finish_request(budget_root, attempt, "responded", metadata.get("usage"))
         return self._finish(task_id, request, merged["text"], merged["tool_calls"], merged)
 
 

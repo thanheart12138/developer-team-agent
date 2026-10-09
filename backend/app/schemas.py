@@ -19,10 +19,17 @@ class TaskResponse(BaseModel):
     product_document_available: bool = False
     result_url: str | None = None
     failure_reason: str | None = None
+    execution_mode: str | None = None
+    repair_state: str | None = None
+    stop_reason: str | None = None
+    budget: dict | None = None
+    submission_id: str | None = None
+    repair_decision: dict | None = None
+    task_version: int | None = None
 
 
 class CreateEventRequest(BaseModel):
-    type: Literal["user_message", "document_approval", "acceptance_result", "change_request"]
+    type: Literal["user_message", "document_approval", "acceptance_result", "change_request", "repair_request"]
     data: dict
 
 

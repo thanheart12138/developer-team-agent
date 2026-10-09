@@ -1,6 +1,8 @@
 # 架构问题与方案演进
 
-2026-10-05 返修升级处于文档草案阶段：方向与起草已获同意，具体设计和执行隔离待确认，未实施或进行真实模型验证。候选方案见 [产品](../REPAIR_PRODUCT_V1_AI_DRAFT.md) 、[架构](../REPAIR_ARCHITECTURE_V1_AI_DRAFT.md) 和 [Dev Design](../REPAIR_DEV_DESIGN_V1_AI_DRAFT.md) ，分别在既有 002／003／004 原问题中记录演进，不另建重复问题。
+2026-10-09 当前补充：统一 Docker Sandbox 与连续主会话第二批已实现及真实工具合成验证，真实模型新模式完整交付未验证。面试介绍入口见 [讲解与证据索引](../INTERVIEW_GUIDE.md) ，历史失败保留在原问题记录中。
+
+2026-10-05 用户已确认返修增量并授权实施，第一批固定验证收尾与实际请求守卫已实现、机制已验证，详见 [004 最新记录](004-unit-handoff-and-progress-control.md) 和 [验证证据](../evidence/repair-v1-fixed-validation-20261005.md) 。真实新入口因执行隔离待选定而拒绝；连续会话、范围权限和真实模型成本尚未验证。完整已确认方案见 [产品](../REPAIR_PRODUCT_V1_AI_DRAFT.md) 、[架构](../REPAIR_ARCHITECTURE_V1_AI_DRAFT.md) 和 [Dev Design](../REPAIR_DEV_DESIGN_V1_AI_DRAFT.md) ，保留原失败与历史，不另建重复问题。
 
 用于保存用户委托记录的真实工程过程，面试时能回答「为什么这样设计、尝试过什么、证据是什么、还有什么没有解决」。协作规则见项目 AGENTS.md，目录约定见上级 README.md。
 
@@ -11,7 +13,7 @@
 | 001 | [开发粒度与逐单元测试门禁](001-development-units-and-test-gates.md) | 机制已实现并验证，完整真实自主设计／交付未通过 |
 | 002 | [工具上下文与执行记忆](002-tool-context-and-execution-memory.md) | 同断点到交接历史 Token 少 30.16％，跨阶段恢复已机制验证；修复后续测到第三次目标复审的可见记录保留，临时断点缺失、最终状态与完整成本未确认 |
 | 003 | [集成失败的返修责任归属](003-integration-failure-ownership.md) | 启动、页面与测试已修，两个目标按当前版本独立闭合到待验收；旧调查澄清／本地预算责任记录保持 |
-| 004 | [开发提交与无进展停止](004-unit-handoff-and-progress-control.md) | 原交接／目标闭环是历史事实；修复后续测已开始，断点缺失导致 finish 未确认，原平台当前未运行，完成门禁保持 |
+| 004 | [开发提交与无进展停止](004-unit-handoff-and-progress-control.md) | 新返修固定收尾机制已验证；旧素材平台真实修复通过但 220 次预算耗尽、目标未核销，真实新模式因隔离待决未启用 |
 
 最新边界：正式 MySQL 的 24 任务／16,908 Trace 和全部 Trace 详情文件仍在，API 8001／前端 5173／空闲 Worker 已恢复，九条只读服务／真实 Chrome 检查及前后状态／计数／schema／文件核对通过，零模型调用。修复后的旧六次上限续测仍仅可见第三次目标复审开始；原隔离目录缺失、用户没有备份，最终状态／用量未确认。持久实验留存已修正并本地验证，没有恢复旧断点、重置预算或补记模型交付。详见 [正式服务恢复](../evidence/formal-service-recovery-20261003.md) 、[留存修正](../evidence/experiment-storage-validation-20261003.md) 、[断点缺失记录](../evidence/planner-evidence-reuse-interrupted-20261003.md) 。
 

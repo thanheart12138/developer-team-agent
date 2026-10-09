@@ -222,6 +222,7 @@ class ToolSummaryStore:
         for row in records:
             latest[row["operation_key"]] = row
         failures = [{"summary_id": row["summary_id"], "parent_model_call_id": row["parent_model_call_id"],
+                     "tool_call_id": row.get("tool_call_id"), "tool_name": row.get("tool_name"),
                      "error_excerpt": row.get("error_excerpt"), "evidence_ref": row["evidence_ref"]}
                     for row in latest.values() if row["status"] in {"failed", "blocked"}]
         # 执行成功与验证当前版本分开表达，不把旧版本结果套到新文件。

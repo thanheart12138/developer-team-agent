@@ -41,6 +41,12 @@ function App() {
   }
 
   async function sendEvent(type, data) {
+    if (type === "user_message" && task?.repair_decision) {
+      data = { ...data, decision_id: task.repair_decision.id };
+    }
+    if (type === "acceptance_result" && task?.execution_mode === "repair-v1") {
+      data = { ...data, submission_id: task.submission_id, expected_task_version: task.task_version };
+    }
     try { await request(`/tasks/${taskId}/events`, { method: "POST", body: JSON.stringify({ type, data }) }); setError(""); }
     catch (reason) { setError(reason.message); }
   }
@@ -143,6 +149,7 @@ function HumanValue({ value }) {
 function MetaRows({ value }) { return <div className="meta-row">{Object.entries(value).filter(([, item]) => item !== undefined && item !== null).map(([key, item]) => <span key={key}><b>{FIELD_LABELS[key] || key}</b>{key.endsWith("_at") ? new Date(item).toLocaleString() : String(item)}</span>)}</div>; }
 
 function TaskAction({ task, version, document, send }) {
+  if (task?.repair_state === "waiting_decision") return <section><p>{task.repair_decision?.question}</p><p>{task.repair_decision?.impact}</p><p>{task.repair_decision?.proposal}</p><Clarification send={send} /></section>;
   if (task?.status === "waiting_user" && !task.product_document_available) return <Clarification send={send} />;
   if (task?.status === "waiting_user" && task.product_document_available) return <Approval version={version} document={document} send={send} />;
   if (task?.status === "waiting_acceptance") return <Acceptance send={send} />;

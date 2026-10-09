@@ -25,6 +25,7 @@ from ..models import Event, EventStatus, Message, Step, StepRun, StepStatus, Tas
 from .contracts import ModelRequest, ToolCall, ToolResult
 from .context_relay import DeepSeekContextRelay, covered_end_line
 from .model import ModelProtocolError, create_model_runtime
+from .repair_runtime import BudgetExceeded
 from .prompt_registry import PromptContent, sha256_text
 from .tools import TOOL_SCHEMAS, QUERY_TOOL_SCHEMAS, ToolRuntime
 from .tool_summaries import ToolSummaryStore
@@ -137,15 +138,25 @@ def duplicate_read_error(action: ToolCall, history: list[dict], request_context:
     target = tools.workspace / path
     if not target.is_file():
         return None
+    if hasattr(tools, 'readable') and target not in tools.readable:
+        return None
+    visible_spans = []
+    current_hash = hashlib.sha256(target.read_bytes()).hexdigest()
     requested_start, requested_end = action.parameters.get('start_line'), action.parameters.get('end_line')
+    if requested_start is None and requested_end is None and hasattr(tools, 'default_read_lines'):
+        # 默认两百行也是明确范围，重复默认预览不能伪装成补读全文。
+        requested_start, requested_end = 1, min(tools.default_read_lines,
+                                              len(target.read_text(encoding='utf-8').splitlines()))
     for available in request_context.get('carried_file_context', []):
         # 接力刷新后的正文独立证明当前范围；旧读记录的哈希不能替代这个新版本。
         if available.get('path') != path or available.get('content') is None:
             continue
+        if available.get('sha256') == current_hash:
+            visible_spans.append((available.get('start_line', 1), covered_end_line(available)))
         covered = (available.get('complete') is True if requested_start is None and requested_end is None else
                    type(requested_start) is int and type(requested_end) is int
                    and available.get('start_line', 1) <= requested_start <= requested_end <= available.get('covered_end_line', 0))
-        if covered and available.get('sha256') == hashlib.sha256(target.read_bytes()).hexdigest():
+        if covered and available.get('sha256') == current_hash:
             return f'read_already_in_context:{path}:carried_file_context; use the available current-version content'
     snapshot = request_context.get('current_product_files', {})
     available_results = request_context.get('current_requested_data', []) + [
@@ -172,10 +183,12 @@ def duplicate_read_error(action: ToolCall, history: list[dict], request_context:
                 and available.get('output', {}).get('sha256') == output.get('sha256')
                 for available in available_results):
             continue
-        requested_start, requested_end = action.parameters.get('start_line'), action.parameters.get('end_line')
+        if output.get('sha256') == current_hash:
+            visible_spans.append((output.get('start_line', 1), covered_end_line(output)))
         if requested_start is None and requested_end is None:
-            covered = (previous['parameters'].get('start_line') is None and
-                       previous['parameters'].get('end_line') is None)
+            # 默认预览与字节截断不证明全文，允许读取缺少的范围。
+            covered = (not output.get('truncated') and output.get('start_line', 1) == 1
+                       and covered_end_line(output) == output.get('total_lines'))
         elif type(requested_start) is int and type(requested_end) is int:
             first = output.get('start_line', 1)
             # 工具声明的请求结束行可能含字节截断的半行，只有实际完整返回的范围可去重。
@@ -187,8 +200,22 @@ def duplicate_read_error(action: ToolCall, history: list[dict], request_context:
         if not covered:
             continue
         prior_hash = output.get('sha256')
-        if prior_hash and hashlib.sha256((tools.workspace / path).read_bytes()).hexdigest() == prior_hash:
+        if prior_hash and current_hash == prior_hash:
             return f'read_already_in_context:{path}:available_file_content; use the available content to write, test, or report a real blocker'
+    # 多次实际返回的相邻范围共同覆盖请求时，也不能重复读取同一正文。
+    merged = []
+    for first, last in sorted(visible_spans):
+        if last < first:
+            continue
+        if merged and first <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], last)
+        else:
+            merged.append([first, last])
+    if requested_start is None and requested_end is None and merged:
+        requested_start, requested_end = 1, len(target.read_text(encoding='utf-8').splitlines())
+    if type(requested_start) is int and type(requested_end) is int and any(
+            first <= requested_start <= requested_end <= last for first, last in merged):
+        return f'read_already_in_context:{path}:merged_visible_ranges; use the available content'
     return None
 
 
@@ -636,13 +663,26 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                             run.last_completed_action_index = max(run.last_completed_action_index, index)
             save_checkpoint(run, checkpoint_entries)
             history = [entry for entry in checkpoint_entries
-                       if entry.get("result") and entry.get("history_key", "default") == history_key]
+                       if (entry.get("result") or (context.get('repair_session') and 'assistant_content' in entry))
+                       and entry.get("history_key", "default") == history_key]
     # 根据阶段选择主 Provider，技术失败时才尝试受控降级。
-    primary_runtime = create_model_runtime(db, runtime_step or task.cur_step)
+    from .repair_runtime import load as load_repair
+    repair_mode = load_repair(workspace_for(task))
+    primary_runtime = create_model_runtime(db, Step.develop if repair_mode else runtime_step or task.cur_step)
+    if context.get('repair_session'):
+        # 连续主会话固定 Provider 和模型，配置变化不能悄悄迁移思考协议。
+        from .repair_runtime import save as save_repair
+        session = repair_mode['session']
+        if primary_runtime.provider != session['provider']:
+            raise RuntimeError('repair_session_provider_changed')
+        if session.get('model') and session['model'] != primary_runtime.model_name:
+            raise RuntimeError('repair_session_model_changed')
+        session['model'] = primary_runtime.model_name
+        save_repair(workspace_for(task), repair_mode)
     # 仅已有产物的 DeepSeek 切片返修启用接力，其他开发流程保持原会话边界。
-    relay = (DeepSeekContextRelay(tools, run.id, history_key)
-             if primary_runtime.provider == 'deepseek' and context.get('repair_task')
-             and refresh_diagnostic is not None else None)
+    relay = (DeepSeekContextRelay(tools, repair_mode['event_id'] if context.get('repair_session') else run.id, history_key)
+             if primary_runtime.provider == 'deepseek' and (context.get('repair_session') or
+                (context.get('repair_task') and refresh_diagnostic is not None)) else None)
     text_without_submit = 0
     if context.get('require_unit_submission'):
         # 恢复开发自测证据，过期结果只能作为旧失败依据，不能授权提交。
@@ -659,6 +699,12 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                     return 'SUBMITTED_FOR_TEST'
                 break
     while run.model_call_count < MAX_MODEL_CALLS_PER_STEP:
+        if context.get('repair_session'):
+            # 刷新当前计划、问题与完整文件集合；不因阶段恢复另建协议历史。
+            current = load_repair(workspace_for(task))
+            context = {**context, 'unit_file_scope': list(tools.self_test_versions()),
+                       'unit_self_test': tools.self_test, 'plan': current['session']['plan'],
+                       'decisions': current['session']['decisions'], 'last_failure': current.get('last_failure')}
         batch_versions = tools.self_test_versions() if relay else None
         if context.get('require_unit_submission'):
             from .unit_workflow import file_hashes
@@ -689,7 +735,10 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
         schemas = TOOL_SCHEMAS if tool_schemas is None else tool_schemas
         if any(schema["function"]["name"] in {"read", "exec"} for schema in schemas):
             schemas = schemas + QUERY_TOOL_SCHEMAS
-        tool_instructions = "每次工具调用用 description 简述目的。当前文件版本以 product_file_manifest 为准；tool_summaries 是当前循环按文件合并的最近读取／写入状态，不是历史流水。current_requested_data 返回本次请求的读取／查询数据，content_source=current_product_files 表示全文已在当前快照。已完整读取且哈希未变的文件不要重复读。development_state 是当前单元交接提示，文件齐备不等于测试通过；按 next_action 进行自测、修复或交接；require_unit_submission=true 时必须调用 submit_unit_for_test，普通完成文本不能替代提交。仅可使用本次提供的工具。earlier_summary_count 表示省略的文件状态数。不得把历史执行成功当作当前代码已验证。"
+        tool_instructions = "每次工具调用用 description 简述目的。当前文件版本以 product_file_manifest 为准；tool_summaries 是当前循环按文件合并的最近读取／写入状态，不是历史流水。current_requested_data 返回本次请求的读取／查询数据，content_source=current_product_files 表示全文已在当前快照。已完整读取且哈希未变的文件不要重复读。development_state 是当前单元交接提示，文件齐备不等于测试通过；按 next_action 进行自测、修复或交接；require_unit_submission=true 时必须调用 submit_unit_for_test，普通完成文本不能替代提交。仅可使用本次提供的工具。earlier_summary_count 表示省略的文件状态数。"
+        # 区分未验证的历史成功与程序已核对当前全产品版本的真实自测，避免接力后反复怀疑证据。
+        tool_instructions += ('旧成功不能替代当前证据；development_state.current_version_passed=true表示程序已核对真实自测与当前完整产品版本，独立上下文接力不会使它失效。仍需判断原缺陷和必要修改是否完成，再显式提交。'
+                              if context.get('repair_session') else '不得把历史执行成功当作当前代码已验证。')
         if context.get('require_unit_submission'):
             # 开发自测与后续独立验证分开，旧失败不代表修改后的版本仍失败。
             tool_instructions += '开发必须先 run_unit_tests 自测，当前版本通过后才 submit_unit_for_test。修改使旧结果过期，应重新自测；unit_self_test 返回真实自测结果，旧 unit_test_feedback/global_failure 是修复依据，不能认定未复测的新版本仍有原错误。'
@@ -715,7 +764,31 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                            "model_call_budget": {"unit": "logical_model_call", "limit": MAX_MODEL_CALLS_PER_STEP,
                                "used_including_current": run.model_call_count,
                                "remaining_after_current": MAX_MODEL_CALLS_PER_STEP - run.model_call_count,
-                               "transport_retries_counted": False}}
+                                   "transport_retries_counted": False}}
+        if repair_mode:
+            # 当前视图展示实际 HTTP 剩余额度，逻辑调用数不能替代发送预算。
+            actual = load_repair(workspace_for(task))
+            budget = actual["budget"]
+            reserve = 0 if actual["state"] == "reviewing" else budget["review_reserve"]
+            request_context["actual_request_budget"] = {
+                "attempts_used": budget["attempts_used"], "total_limit": budget["total_limit"],
+                "review_reserve": budget["review_reserve"],
+                "remaining_before_send": max(0, budget["total_limit"] - reserve - budget["attempts_used"]),
+                "authorization_ref": actual["authorization_ref"], "retries_counted": True}
+        if context.get('repair_session'):
+            # 主会话不展示旧卡交接指令，允许自测后必要阅读及继续修改。
+            request_context['current_task'] = {'session_id': context['session_id'],
+                'original_feedback': actual['feedback'], 'plan': actual['session']['plan'],
+                'last_failure': actual.get('last_failure'), 'write_scope': 'current_task_product',
+                'needs_explicit_submission': True}
+            self_test_current = bool(tools.self_test and tools.restore_self_test(tools.self_test))
+            request_context['development_state'] = {'self_test_ref': 'unit_self_test',
+                'current_version_passed': self_test_current,
+                'next_action': 'submit_if_repair_complete' if self_test_current else 'continue_work_and_self_test',
+                'instruction': ('原缺陷已修复且没有未完成修改时，请显式提交；程序负责后续浏览器和目标审查。'
+                                if self_test_current else '完成修复后运行当前版本全量自测，再明确提交。'),
+                'automatic_submit': False}
+            tool_instructions += '这是任务级连续返修会话，文件权限按当前产品目录，不按旧卡片。自测成功仍允许必要阅读或修改；修改后重新自测。关键决定用 request_decision 明确暂停，不能用 BLOCKED 文本或结束文本代替受控工具。'
         tool_instructions += 'model_call_budget 是当前 Step 的实际逻辑调用预算，已用包含本次，剩余为本次之后可请求次数；传输重试不计入该字段，它不是 HTTP 次数上限。安排必要修改、自测和提交，预算不会因接力或恢复重置。'
         if primary_runtime.provider == "deepseek":
             # 当前会话完整续传；安全边界之前的原始历史保留在审计而不拼接到新会话。
@@ -729,6 +802,43 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                 tool_instructions += 'context_session 表示已从完整修改批次后开始新会话。carried_file_context 是以前实际读过或写过范围的当前版本正文，优先使用；未提供或截断的范围仍可按需读取。历史原始思考与结果只读保存在证据中，可用查询工具检索。'
                 tool_instructions += 'diagnostic_report_refs 仅为已读诊断的查询引用，报告针对当时版本，不代表当前失败；当前结果以 unit_diagnostic 及其版本适用性为准。'
                 tool_instructions += 'carried_file_refs 仅记录未携带正文的已知范围，不能视作当前可用代码；确需这些内容时可以按原权限 read。'
+                if context.get('repair_session') and tools.self_test and tools.restore_self_test(tools.self_test):
+                    # 通过诊断已完成独立上下文交接，只传版本与状态，完整输出可从审计查询。
+                    request_context['unit_self_test'] = {k: v for k, v in tools.self_test.items() if k != 'result'}
+                    request_context['unit_self_test']['result_ref'] = {'content_source': 'checkpoint_audit',
+                        'query_tool': 'get_model_call_summaries', 'model_call_id': relay_context['context_session']['boundary_request_id']}
+        if context.get('repair_session'):
+            from .repair_session import project_test_history, self_test_view
+            # 从首次发送起使用一致的摘要工具结果，原始思考和完整日志仍在检查点及 Trace。
+            for key in ('tool_history', 'reasoning_tool_history'):
+                if key in request_context:
+                    request_context[key] = project_test_history(request_context[key])
+            visible_results = {entry['action']['call_id']: entry['result']
+                               for entry in request_context.get('reasoning_tool_history', request_context.get('tool_history', []))
+                               if entry.get('action') and entry.get('result')}
+            request_context['current_requested_data'] = [
+                visible_results.get(item.get('call_id')) or {**item, 'output': self_test_view(item['output'])}
+                if item.get('tool_name') == 'run_unit_tests' and isinstance(item.get('output'), dict) else item
+                for item in request_context.get('current_requested_data', [])]
+            if tools.self_test:
+                source = next((entry for entry in reversed(history)
+                               if entry.get('action', {}).get('tool_name') == 'run_unit_tests'), {})
+                request_context['unit_self_test'] = self_test_view(tools.self_test, {
+                    'content_source': 'checkpoint_audit', 'query_tool': 'get_model_call_summaries',
+                    'model_call_id': source.get('model_request_id'),
+                    'tool_call_id': source.get('action', {}).get('call_id')})
+        if context.get('repair_session'):
+            from .repair_session import current_facts, uses_current_facts
+            if uses_current_facts(actual):
+                # 新尝试在最后投影当前事实，不影响旧会话、实际协议或正文补读判定。
+                request_context = current_facts(request_context, actual, history, tools)
+                tool_instructions = ('每次工具调用用description简述目的。current_task_facts是当前事实，work_progress是模型判断；'
+                    '最新独立验证失败不能被旧自测覆盖。product_file_manifest是当前文件版本；'
+                    'carried_file_context和协议工具消息只证明实际提供的正文范围，缺失／截断／变更范围可按权限补读。'
+                    'current_requested_data是本次查询结果。历史按需用get_file_change_history、get_model_call_summaries、'
+                    'get_tool_execution_detail查询。verification_execution_contract是程序验证职责。'
+                    'model_call_budget是逻辑调用预算，actual_request_budget是含失败和重试的HTTP预算，接力或恢复不重置。'
+                    '只能使用提供的工具；仍需判断业务完成并显式submit_unit_for_test，必要修改后重新自测，关键决定用request_decision暂停。')
         request = ModelRequest(instructions=f"{BASE_INSTRUCTIONS}\n\n{instruction_text}\n\n{tool_instructions}", input=input_text,
                                context=request_context,
                                tools=schemas,
@@ -777,6 +887,9 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                     finally:
                         publish_live_response(str(workspace_for(task)), "", "")
                     break
+                except BudgetExceeded:
+                    # 额度耗尽不是网络失败，不重试、不降级、不包装错误。
+                    raise
                 except ModelProtocolError as exc:
                     protocol_error = exc
                     final_error = exc
@@ -860,7 +973,8 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
         if tool_schemas == [] and result.actions:
             raise RuntimeError("model_tool_call_not_allowed")
         if not result.actions:
-            if context.get('require_unit_submission') and not result.text.strip().startswith('BLOCKED:'):
+            if ((context.get('require_unit_submission') and not result.text.strip().startswith('BLOCKED:'))
+                    or context.get('repair_session')):
                 # 普通完成文本不能绕过显式提交，最多两次纠正后停止。
                 text_without_submit += 1
                 if text_without_submit > MAX_NO_CHANGE_CORRECTIONS:
@@ -871,14 +985,24 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                              "assistant_content": result.text,
                              "reasoning_content": result.raw_response.get("reasoning_content", ""),
                              "result": {"status": "succeeded"}}
-                    entry["unit_versions_before"] = file_hashes(workspace_for(task), context['owned_files'])
-                    entry["unit_versions_after"] = entry["unit_versions_before"]
+                    if context.get('repair_session'):
+                        # 普通文本也保留思考，但不能依赖旧单元的文件清单。
+                        entry['repair_versions_before'] = tools.self_test_versions()
+                        entry['repair_versions_after'] = entry['repair_versions_before']
+                    else:
+                        entry["unit_versions_before"] = file_hashes(workspace_for(task), context['owned_files'])
+                        entry["unit_versions_after"] = entry["unit_versions_before"]
                     history.append(entry)
                     checkpoint_entries.append(entry)
                     save_checkpoint(run, checkpoint_entries)
                 context = {**context, 'submission_feedback':'必须调用 submit_unit_for_test，普通结束文本不代表提交。'}
                 continue
             return result.text
+        if context.get('repair_session'):
+            # 保存完整批次意图，逐动作结果落盘后解除；中断不能漏掉未执行调用。
+            current = load_repair(workspace_for(task))
+            current['session']['pending_actions'] = [a.__dict__ for a in result.actions]
+            save_repair(workspace_for(task), current)
         # 工具执行前保存待办检查点，便于故障恢复。
         for index, action in enumerate(result.actions, start=run.last_completed_action_index + 1):
             entry = {"history_key": history_key, "model_request_id": result.request_id,
@@ -889,6 +1013,9 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                 entry["assistant_content"] = result.text or None
             if context.get('require_unit_submission'):
                 entry['unit_versions_before'] = file_hashes(workspace_for(task), context['owned_files'])
+            if context.get('repair_session'):
+                # 登记实际产品版本变化，为之后的完整自测批次提供接力依据。
+                entry['repair_versions_before'] = tools.self_test_versions()
             entries = checkpoint_entries + [entry]
             save_checkpoint(run, entries)
             signature = _action_signature(action)
@@ -899,9 +1026,22 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                                     and _repair_actions_without_write(checkpoint_entries, history_key)
                                     >= MAX_REPAIR_ACTIONS_WITHOUT_WRITE)
             # 阻止连续重复动作和返修中无写入循环。
-            invalid_submit = (context.get('require_unit_submission') and action.tool_name == 'submit_unit_for_test'
+            invalid_submit = ((context.get('require_unit_submission') or context.get('repair_session'))
+                              and action.tool_name in {'submit_unit_for_test', 'request_decision'}
                               and action is not result.actions[-1])
             duplicate_read = duplicate_read_error(action, history, request_context, tools)
+            if context.get('repair_session') and action.tool_name == 'read' and not duplicate_read:
+                # 合法补读以当前可见版本为准，不能被旧动作签名继续禁止。
+                parameters = action.parameters
+                first, last = parameters.get('start_line'), parameters.get('end_line')
+                valid_range = ((first is None and last is None) or
+                               (type(first) is int and type(last) is int and 1 <= first <= last))
+                try:
+                    target = tools._safe_path(parameters['path'])
+                    if valid_range and target in tools.readable and target.is_file():
+                        repeated = 0
+                except (KeyError, TypeError, ValueError):
+                    pass
             if repeated >= MAX_IDENTICAL_TOOL_ACTIONS or repair_without_write or invalid_submit or duplicate_read:
                 # 阻止连续重复动作和返修中无写入循环。
                 code = ('submission_must_be_last' if invalid_submit else
@@ -917,6 +1057,8 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                 # 受控工具执行后记录调用、结果和文件产物。
                 tool_result = execute_tool(db, task, run, tools, action, result.request_id, history_key)
             entry["result"] = tool_result.__dict__
+            if context.get('repair_session'):
+                entry['repair_versions_after'] = tools.self_test_versions()
             if context.get('require_unit_submission'):
                 entry['unit_versions_after'] = file_hashes(workspace_for(task), context['owned_files'])
                 # 读取进展与完成状态独立保存，检查点恢复后不重复发放相同范围进展。
@@ -924,6 +1066,12 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             history.append(entry)
             checkpoint_entries.append(entry)
             save_checkpoint(run, checkpoint_entries)
+            if context.get('repair_session'):
+                # 当前结果与协议已落盘，才移除对应意图，不推测未知副作用。
+                current = load_repair(workspace_for(task))
+                current['session']['pending_actions'] = [a for a in current['session']['pending_actions']
+                                                          if a['call_id'] != action.call_id]
+                save_repair(workspace_for(task), current)
             if tool_result.status == "succeeded":
                 run.last_completed_action_index = index
             db.commit()
@@ -940,6 +1088,21 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                         and diagnostic.get('file_hashes_before') == current_versions
                         and diagnostic.get('file_hashes_after') == current_versions):
                     relay.complete_batch(history, result.request_id, [action.call_id for action in result.actions], diagnostic)
+        elif relay and context.get('repair_session'):
+            # 只利用模型主动自测结果建立完整批次边界，不自动增加诊断命令。
+            diagnostic = tools.self_test
+            current_versions = tools.self_test_versions()
+            # 查找协议边界只需索引，不为此重复刷新源码正文。
+            boundary_end = relay._boundary_end(history, relay.boundaries[-1]) if relay.boundaries else None
+            previous_history = history[boundary_end:] if boundary_end is not None else history
+            changed = any(e.get('action', {}).get('tool_name') in {'write', 'replace'}
+                          and e.get('result', {}).get('status') == 'succeeded'
+                          and e.get('repair_versions_before') != e.get('repair_versions_after')
+                          for e in previous_history)
+            if (changed and diagnostic and diagnostic.get('file_hashes_before') == current_versions
+                    and diagnostic.get('file_hashes_after') == current_versions
+                    and any(a.tool_name == 'run_unit_tests' for a in result.actions)):
+                relay.complete_batch(history, result.request_id, [a.call_id for a in result.actions], diagnostic)
     raise RuntimeError("model_call_limit_exceeded")
 
 
@@ -994,6 +1157,10 @@ def fail_or_repair(db: Session, task: Task, run: StepRun, reason: str):
 def product_code_hashes(task: Task) -> dict[str, str]:
     # 取得会影响测试和浏览器行为的当前产品代码哈希，用于防止复用旧验证结果。
     root = workspace_for(task)
+    from .repair_runtime import load as load_repair, manifest
+    if load_repair(root):
+        # 新方式将目标关闭绑定需求、授权及完整产品，不能复用另一版本。
+        return manifest(root)
     return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted((root / "product").rglob("*"))
             if path.is_file() and path.suffix in {".html", ".css", ".js", ".cjs", ".mjs", ".py"}}
@@ -2053,8 +2220,16 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
-def handle_start(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
-    # 启动生成软件并检查 HTTP 健康状态。
+def start_product_service(db: Session, task: Task, run: StepRun, tools: ToolRuntime) -> dict:
+    # 启动并核对实际服务，返回事实，由调用方保存证据并推进任务。
+    from .sandbox import for_workspace
+    isolated = for_workspace(tools.workspace)
+    if isolated is not None:
+        # 新模式只启动可信快照预览，不在宿主运行生成服务脚本。
+        service = isolated.start_preview(task)
+        safe_record_trace(db, task, run, "validation", "succeeded", "Sandbox 服务与预览健康检查通过",
+                          service["url"], service)
+        return service
     port = free_port()
     # 在服务子进程中扩大监听队列，避免模块并发建连填满标准库默认的五个位置。
     bootstrap = ("import runpy,socketserver,sys;"
@@ -2064,8 +2239,7 @@ def handle_start(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
     command = f'python -c "{bootstrap}"'
     result = execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec", {"action": "start", "command": command}))
     if result.status != "succeeded" or not result.output.get("running"):
-        fail_or_repair(db, task, run, result.error or "product_start_failed")
-        return
+        raise RuntimeError(result.error or "product_start_failed")
     url = f"http://127.0.0.1:{port}"
     try:
         healthy = False
@@ -2081,14 +2255,23 @@ def handle_start(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
             raise RuntimeError("health_check_failed")
     except Exception as exc:
         execute_tool(db, task, run, tools, ToolCall(str(uuid.uuid4()), "exec", {"action": "stop", "process_id": result.output["process_id"]}))
-        fail_or_repair(db, task, run, str(exc))
-        return
-    task.port = port
-    task.process_id = result.output["process_id"]
-    task.process_command = command
-    task.result_url = url
+        raise RuntimeError(str(exc)) from exc
     safe_record_trace(db, task, run, "validation", "succeeded", "健康检查通过", url,
                       {"url": url, "process_id": result.output["process_id"]})
+    return {"url": url, "port": port, "process_id": result.output["process_id"], "command": command}
+
+
+def handle_start(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
+    # 旧入口沿用原启动失败返修策略，新方式可以先保存启动证据再投影。
+    try:
+        service = start_product_service(db, task, run, tools)
+    except RuntimeError as exc:
+        fail_or_repair(db, task, run, str(exc))
+        return
+    task.port = service["port"]
+    task.process_id = service["process_id"]
+    task.process_command = service["command"]
+    task.result_url = service["url"]
     run.output_path = "product/index.html"
     finish_step(db, task, run, Step.verify_product)
 
@@ -2514,7 +2697,20 @@ def plan_acceptance_feedback(db: Session, task: Task, event: Event, feedback: st
 def consume_event(db: Session, event: Event, task: Task):
     # 根据事件类型和当前状态处理用户操作。
     data = event.data or {}
-    if event.type == "document_approval":
+    if event.type == "repair_request":
+        from .repair_runtime import initialize
+        try:
+            initialize(task, event)
+        except (ValueError, RuntimeError) as exc:
+            reject_event(event, str(exc))
+            return
+        # 新尝试保留原始目标并直接交连续执行会话，不再先调用选卡 Planner。
+        from .repair_objectives import capture
+        capture(workspace_for(task), {'event_id': event.id, 'classification': 'implementation_defect',
+                                    'user_feedback': data['feedback']})
+        add_message(db, task, 'user', data['feedback'])
+        task.status, task.cur_step = TaskStatus.running, Step.develop
+    elif event.type == "document_approval":
         if task.status != TaskStatus.waiting_user or task.cur_step != Step.product_docs:
             reject_event(event, "task_not_waiting_for_product_approval")
             return
@@ -2551,6 +2747,36 @@ def consume_event(db: Session, event: Event, task: Task):
         if task.status != TaskStatus.waiting_acceptance:
             reject_event(event, "task_not_waiting_for_acceptance")
             return
+        from .repair_runtime import load as load_repair, current_submission, save as save_repair
+        repair = load_repair(workspace_for(task))
+        if repair:
+            if repair.get("state") == "accepted" and repair.get("acceptance_event_id") == event.id:
+                # 仅修复同一已保存验收事件的数据库投影，不重新批准另一个事件。
+                task.status = TaskStatus.succeeded
+                event.status = EventStatus.consumed
+                event.processed_at = datetime.utcnow()
+                return
+            if (data.get("submission_id") != repair.get("submission_id")
+                    or data.get("expected_task_version") != task.version
+                    or repair.get("state") != "awaiting_acceptance"):
+                reject_event(event, "repair_acceptance_submission_mismatch")
+                return
+            try:
+                current_submission(workspace_for(task), repair)
+            except RuntimeError as exc:
+                reject_event(event, str(exc))
+                return
+            if not data.get("approved"):
+                # 新反馈须通过明确的新返修尝试与预算授权，不沿旧事件隐式续费。
+                reject_event(event, "repair_feedback_requires_new_request")
+                return
+            if repair.get('validation_policy') == 'tests_and_browser':
+                # 浏览器通过只进入待验收；用户明确批准后才关闭当前原始目标。
+                from .repair_objectives import accept_by_user
+                accept_by_user(task, event.id)
+            repair["state"] = "accepted"
+            repair["acceptance_event_id"] = event.id
+            save_repair(workspace_for(task), repair)
         add_message(db, task, "user", str(data.get("feedback", "")) or "提交验收结果")
         if data.get("approved"):
             task.status = TaskStatus.succeeded
@@ -2573,8 +2799,14 @@ def consume_event(db: Session, event: Event, task: Task):
         add_message(db, task, "user", feedback)
         plan_acceptance_feedback(db, task, event, feedback)
     elif event.type == "user_message":
+        from .repair_session import answer as answer_repair
+        try:
+            answered = answer_repair(task, data)
+        except (ValueError, RuntimeError) as exc:
+            reject_event(event, str(exc))
+            return
         add_message(db, task, "user", str(data.get("content", "")))
-        if task.status == TaskStatus.waiting_user:
+        if task.status == TaskStatus.waiting_user and not answered:
             if task.cur_step == Step.product_docs:
                 latest = db.scalar(select(StepRun).where(
                     StepRun.task_id == task.id, StepRun.step == Step.product_docs
@@ -2634,6 +2866,23 @@ def process_task(db: Session) -> bool:
                      .order_by(Task.created_at, Task.id).limit(1))
     if not task:
         return False
+    from .repair_runtime import load as load_repair, pipeline, stop as stop_repair, STEPS as REPAIR_STEPS
+    repair = None
+    repair_error = None
+    try:
+        repair = load_repair(workspace_for(task))
+    except Exception as exc:
+        repair_error = exc
+    if repair and repair['state'] == 'waiting_decision':
+        # 问题先落盘而 Task 投影未提交时，仅恢复等待，不进入验证或重复调用模型。
+        task.status, task.cur_step = TaskStatus.waiting_user, Step.develop
+        db.commit()
+        return True
+    if repair and repair["state"] in REPAIR_STEPS and repair["state"] != "executing":
+        # 先修复阶段投影再创建 Run，使恢复后的审计归属真实阶段。
+        task.cur_step = REPAIR_STEPS[repair["state"]]
+    elif repair and repair["state"] == "executing" and repair.get("last_failure"):
+        task.cur_step = Step.develop
     task.status = TaskStatus.running
     task.version += 1
     db.commit()
@@ -2641,6 +2890,32 @@ def process_task(db: Session) -> bool:
     run = create_step_run(db, task)
     db.commit()
     try:
+        if repair_error:
+            raise repair_error
+        if repair and repair["state"] == "stopped":
+            # 持久停止先于数据库提交时，恢复原停止原因，不重新执行阶段。
+            stop_repair(db, task, run, repair["stop_reason"])
+            return True
+        if repair and repair["state"] == "accepted":
+            task.status = TaskStatus.succeeded
+            run.status = StepStatus.succeeded
+            run.finished_at = datetime.utcnow()
+            db.commit()
+            return True
+        if repair and repair["state"] == "executing" and task.cur_step in {
+                Step.test, Step.start_product, Step.verify_product}:
+            # 旧开发分支尚未接入新提交时明确停止，不能绕过冻结版本验证。
+            stop_repair(db, task, run, "repair_submission_required")
+            return True
+        if repair and repair['state'] == 'executing':
+            # 本任务主会话独立于旧切片与阶段会话，显式提交后才进入固定收尾。
+            from .repair_session import execute as execute_repair
+            execute_repair(db, task, run)
+            return True
+        if repair and repair["state"] != "executing":
+            # 新方式由冻结提交控制固定阶段，无中间 Planner 或模型 finish。
+            pipeline(db, task, run, tools)
+            return True
         if task.cur_step in {Step.architecture_docs, Step.dev_design}:
             # 缺失的设计文档先由 Planner 判断必要性；已有正式版本仍走返工影响判断。
             design_target = ("architecture.md" if task.cur_step == Step.architecture_docs
@@ -2653,7 +2928,7 @@ def process_task(db: Session) -> bool:
                     return True
                 if action == "update_dev_design" and run.step == Step.architecture_docs:
                     return True
-        if active_bug_triage(task) and task.cur_step in {
+        if not repair and active_bug_triage(task) and task.cur_step in {
                 Step.develop, Step.test, Step.start_product, Step.verify_product}:
             # Bug 闭环每轮先由 Planner 提议行动，程序只执行经校验的阶段内动作。
             action = plan_bug_action(db, task, run, tools)
@@ -2689,7 +2964,13 @@ def process_task(db: Session) -> bool:
             handle_start(db, task, run, tools)
         elif task.cur_step == Step.verify_product:
             handle_verify(db, task, run, tools)
+    except BudgetExceeded:
+        # 新模式以独立预算原因停止，旧模型协议和失败记录保持。
+        stop_repair(db, task, run, "budget_exhausted")
     except Exception as exc:
+        if repair:
+            stop_repair(db, task, run, str(exc))
+            return True
         safe_record_trace(db, task, run, "step", "failed", "阶段执行失败", str(exc),
                           {"error_type": type(exc).__name__, "error": str(exc)},
                           started_at=run.started_at, finished_at=datetime.utcnow())

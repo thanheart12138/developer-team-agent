@@ -50,19 +50,32 @@ class DeepSeekContextRelay:
 
     def complete_batch(self, history: list[dict], request_id: str, call_ids: list[str], diagnostic: dict) -> None:
         # 调用方取得当前版本诊断后登记整批边界，保留每次接力的可追溯依据。
-        batch = [entry for entry in history if entry.get("model_request_id") == request_id]
+        previous_end = self._boundary_end(history, self.boundaries[-1]) if self.boundaries else 0
+        if previous_end is None:
+            # 上一边界无法核对时保持原协议，不猜测本轮修改区间。
+            return
         boundary = {"model_request_id": request_id, "call_ids": call_ids,
                     "reason": "changed_files_and_current_diagnostic",
                     "diagnostic_ref": diagnostic.get("detail_path"),
                     "file_versions": diagnostic.get("file_hashes_after"),
-                    "recent_changes": [
+                    "diagnostic_passed": diagnostic.get("passed"),
+                    "diagnostic_command": diagnostic.get("command"),
+                    "diagnostic_versions_unchanged": bool(diagnostic.get("file_hashes_after"))
+                        and diagnostic.get("file_hashes_before") == diagnostic.get("file_hashes_after"),
+                    "recent_changes": []}
+        end = self._boundary_end(history, boundary)
+        if end is None or end <= previous_end:
+            return
+        # 修改与自测通常分属不同调用，接力必须保留自上一边界起的真实成功修改。
+        boundary["recent_changes"] = [
                         {"tool_name": entry["action"]["tool_name"],
                          "path": entry["action"]["parameters"].get("path"),
-                         "description": entry["action"]["parameters"].get("description", "")[:200]}
-                        for entry in batch if entry.get("action", {}).get("tool_name") in {"write", "replace"}
-                        and entry.get("result", {}).get("status") == "succeeded"]}
-        if self._boundary_end(history, boundary) is None:
-            return
+                         "description": entry["action"]["parameters"].get("description", "")[:200],
+                         "model_request_id": entry.get("model_request_id"),
+                         "tool_call_id": entry["action"].get("call_id")}
+                        for entry in history[previous_end:end]
+                        if entry.get("action", {}).get("tool_name") in {"write", "replace"}
+                        and entry.get("result", {}).get("status") == "succeeded"]
         self.boundaries.append(boundary)
         # 原子写入独立证据，避免边界标记参与原有无进展计算或动作恢复。
         temporary = self.path.with_suffix(".json.tmp")
@@ -139,6 +152,9 @@ class DeepSeekContextRelay:
         # 仅依据当前有效诊断与最近修改选择源码，无法定位时保留全部已知范围。
         source = context.get("current_task", {}).get("latest_evidence", {}).get("source_ref")
         report = context.get(source) if source else context.get("unit_diagnostic")
+        if context.get("repair_session"):
+            # 返修保留已调查的依赖范围，避免仅按修改文件筛选后重新读取业务链。
+            return None
         if not isinstance(report, dict) or report.get("matches_current_files") is not True:
             return None
         changed = {item["path"] for item in boundary.get("recent_changes", []) if item.get("path")}
@@ -169,6 +185,10 @@ class DeepSeekContextRelay:
         return history[end:], {"context_session": {"boundary_request_id": boundary["model_request_id"],
             "reason": boundary["reason"], "diagnostic_ref": boundary["diagnostic_ref"],
             "recent_changes": boundary["recent_changes"],
+            "diagnostic": {"passed": boundary.get("diagnostic_passed"),
+                           "command": boundary.get("diagnostic_command"),
+                           "versions_unchanged": boundary.get("diagnostic_versions_unchanged")},
+            "continuity": "same_logical_task_after_recorded_changes_and_self_test",
             "history_access": "get_model_call_summaries / get_tool_execution_detail"},
             "carried_file_context": files,
             "carried_file_refs": file_refs,

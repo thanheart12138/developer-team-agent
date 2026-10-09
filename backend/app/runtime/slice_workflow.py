@@ -717,6 +717,13 @@ def handle_repair(db, task, run, tools: ToolRuntime) -> None:
         history_key=_repair_history_key(run, card['id'], failure_key))
     if scoped.submitted_hashes is None:
         raise RuntimeError("slice_repair_submission_required")
+    from .repair_runtime import load as load_repair, persist_submission
+    if load_repair(root):
+        # 显式提交冻结全产品版本，后续固定验证交给程序，保留原卡写权限。
+        persist_submission(task, scoped)
+        run.output_path = "product/implementation.md"
+        w.finish_step(db, task, run, Step.test)
+        return
     if verification_failure:
         # 返修后的浏览器复验与首次验证共用脚本预检，避免绕过 URL 和脚本错误门禁。
         result, command = w.run_product_browser_validation(db, task, run, tools)

@@ -24,6 +24,7 @@ __pycache__/
 # Environment files
 .env*
 secrets/
+secrets_副本/
 
 # Operating system files
 .DS_Store

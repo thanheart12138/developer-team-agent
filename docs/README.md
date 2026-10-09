@@ -1,12 +1,113 @@
 # 文档结构与所有权
 
+2026-10-10 用户委托验收与版本整理完成技术验证：本轮冻结素材平台原Node150项／实际Chromium60条通过，系统完整436项回归及前端构建通过，零模型调用。原生UI额外手工操作未完成，原因与证据边界已记录；系统仍待用户验收，未代发批准事件。已补忽略凭据副本目录，准备明确Git候选清单和源码／生成产品本地归档；不提交推送、不改正式任务。[验收与版本清单](evidence/acceptance-version-20261010.md) 。
+
+2026-10-10 范围搜索同起点真实单缺陷返修完成：DeepSeek thinking12／20HTTP、343,838Token、59.1秒，人工改码／纠错0到待用户验收，原Docker Node150／Chromium60独立通过。较上一单缺陷396,416Token少13.26％，自测2→1且轨迹不同，不单因归责；实际第2轮两个搜索只限定product，正文仍20,857字符，未达到离线单文件90.7％。通过后仍3轮，接力后查询旧修改摘要／call确认根因，连续性问题保留。旧八份runtime／220保持，正式服务未操作，不追加调用；用户未验收。[真实证据](evidence/material-task-detail-scoped-search-deepseek-real-20261010.md) 。
+
+2026-10-10 已按用户确认实现授权内范围搜索：search可选path限定文件／目录，默认全域保持，新会话提示词／schema支持范围，旧绑定不迁移。89项相关回归通过，离线两个原查询正文24,962→2,312字符（少90.7％），必要目标命中保留；这是手选范围投影，不是真实Token收益。八份旧runtime计数及字节保持，六份已知绑定匹配，两份更早未知绑定继续拒绝。空闲API61615／Worker61616已加载，health及五项状态指纹保持，零模型调用、不续跑或提交推送。[范围搜索验证](evidence/repair-scoped-search-validation-20261010.md) 。
+
+[2026-10-10 开发成本诊断](evidence/repair-execution-cost-diagnosis-20261010.md) ：逐轮用量／输入内容／真实思考、有效去重与全域搜索限制，方案待确认，零模型调用。
+
+2026-10-09 无审查新流程真实单缺陷返修完成：任务详情关联素材缺失由DeepSeek thinking自主修复，13／20HTTP（执行13、审查0）、396,416Token、67.1秒，无人工改码／纠错。原断言独立Docker Node150／150及实际浏览器60条通过，网站60777首页GET200匹配。目标仍open、系统待用户验收；第10轮自测通过、第13轮提交，仍3轮收尾调查。旧七轮runtime与旧220保持，机制未在实验中改变、正式服务未操作。不追加调用；单缺陷与历史两缺陷范围不同，不换算成本降幅，成本问题未解决。详见 [真实验证](evidence/material-task-detail-no-review-deepseek-real-20261009.md) 。
+
+2026-10-09 用户确认取消新 repair-v1 的独立模型目标／覆盖审查及审查预留。显式提交后执行全量测试、启动、实际浏览器验证，再等待用户验收；原始目标保持 open 到匹配提交／版本的用户批准，以 user_acceptance 记录关闭依据。总 HTTP 上限不变，旧尝试／原授权／审查记录／提示词绑定保留，不自动迁移或续跑。117 项相关回归及真实本地浏览器夹具通过；空闲服务已加载 API96441／Worker96442，五项状态指纹保持。零新增模型调用，真实 Token 收益未验证。详见 [验证记录](evidence/repair-no-model-review-validation-20261009.md) 。
+
+用户已决定保留现版本；七轮优化全过程与负优化复盘集中于 [面试文档第７节](INTERVIEW_GUIDE.md#７优化过程复盘含负优化) ，区分检索／跨模块两组，包含真实数字、撤回依据、当前不足与追问。
+
+最新真实推进测试：同起点11HTTP／249,583Token到待验收，原150项Node／60条浏览器独立通过，较上轮Token少65.33％；耗时更长、计划参数错误和共同机制／轨迹变化限制保留。详见 [真实证据](evidence/material-cross-module-progress-deepseek-real-20261009.md) 。
+
+最新推进规则已确认并用于新返修提示词，旧v2／legacy绑定保持，83项机制回归通过；零新增HTTP，真实行为／Token收益未验证。详见 [验证记录](evidence/repair-investigation-progress-validation-20261009.md) 。
+
+最新定位后持续调查评审：已有两轮真实记录的第3—14轮逐项核对，模型软性推进规则待确认；未改执行代码或新增付费调用。详见 [调查分类与规则建议](evidence/repair-investigation-progress-review-20261009.md) 。
+
+最新连续性修正：成本实测倒退后恢复返修已读依赖、明确修改操作、保留精确去重，80项回归与14份实际接力请求离线核对通过，零HTTP。正文增加，真实Token收益未验证。详见 [修正证据](evidence/repair-context-continuity-validation-20261009.md) 。
+
+最新真实成本对照：同起点跨模块任务自主交付通过，但719,905Token较396,608增加81.52％，25／30HTTP，正文去重生效而行动次数增多，成本目标未达成。详见 [真实对照](evidence/material-cross-module-cost-deepseek-real-20261009.md) 。
+
+最新上下文成本修正：返修接力接通当前自测、v2同一失败正文引用去重；80项相关回归及十二轮只读回放通过，零新增HTTP。详见 [机制证据](evidence/repair-context-cost-validation-20261009.md) 。字节收益不代表真实Token收益。
+
+## 2026-10-09 四项推进与固定演示
+
+[跨模块真实验证](evidence/material-cross-module-deepseek-real-20261009.md) ：既有多选题删除及任务详情需求、真实绿色／红色预检、DeepSeek13HTTP／396,608Token返修、原断言独立Node150／Chromium60通过；仍5轮收尾，可选模型进度未使用，未发现需本轮修机制的阻塞失败。[面试演示指南](DEMO_GUIDE.md) 提供冻结静态演示、零模型启动、实际Chrome交互和只读恢复检查／四种损坏拒绝，真实运行中崩溃恢复未验证。依据 [已授权计划](evidence/cross-module-repair-plan-20261009.md) ，四项均已推进至可检查结果，不扩大业务或继续试跑。
+
+## 2026-10-09 当前事实与模型进度真实对照
+
+[真实效果与局限](evidence/material-search-current-facts-deepseek-real-20261009.md) ：同起点8HTTP／155,482Token，原断言独立Node149／149与Chromium55条通过，无人工纠错；比上一轮Token少46.89％、最后通过至提交5→3轮。真实工作判断生效，仍历史查询及单独计划调用，轨迹差异保留，不宣称稳定降幅。
+
+## 2026-10-09 当前事实与模型进度已实施
+
+[新上下文契约验证](evidence/repair-current-facts-validation-20261009.md) ：仅新返修绑定v2，程序事实与模型判断分开，失效／独立失败／恢复／旧契约保持。41份原请求离线核对通过，本地服务加载，零新增模型调用；真实提交轮次与Token收益未验证。下文候选状态是当时历史。
+
+## 2026-10-09 上下文结构评审，待确认
+
+[当前任务事实与历史输入评审](evidence/repair-context-view-review-20261009.md) ：实际请求事实核对及单一当前事实投影建议；保留原审计／思考、明确提交和独立验证。仅建议，尚未修改运行契约或追加真实调用。
+
+## 2026-10-09 接力修正后的真实对照
+
+[接力真实效果与局限](evidence/material-search-handoff-comparison-deepseek-real-20261009.md) ：同起点13HTTP／292,780 Token，原断言独立Node149／149、Chromium55条通过；比上一轮Token少32.05％，但最后自测通过到提交4→5轮，接力信息正确却仍反复确认。停止继续同方向试跑，后续上下文组织建议待确认。
+
+## 2026-10-09 提交延迟分析与接力修正
+
+[逐轮分析与最小修正](evidence/repair-handoff-progress-analysis-20261009.md) ：两次接力遗漏跨批次修改、模型重复怀疑修改／测试先后；必要补测保留。修正接力修改区间与自测事实、同版本证据提示及计划／提交批次说明，全套411项通过，原Trace离线演算通过；没有新真实模型调用，不能声称实际收尾轮次减少。
+
+## 2026-10-09 自测成本真实对照
+
+[同起点真实DeepSeek对照](evidence/material-search-cost-comparison-deepseek-real-20261009.md) ：同一素材笔记检索缺陷两轮均完成待验收，优化后16HTTP／430,905 Token，比原629,781少31.58％，但请求15→16、耗时90.6→130.8秒。原断言独立Node149／149与真实Chromium55条通过。摘要真实生效，缓存未触发，收尾请求没有减少；单例不能推断稳定成本优势。
+
+## 2026-10-09 自测成本修正
+
+[自测成本机制验证](evidence/repair-selftest-cost-validation-20261009.md) ：用户确认后实现新返修成功自测摘要、失败详情与原日志引用、同版本真实通过证据复用和明确提交提示。保留思考／工具配对及显式提交。全套 404 项通过、4 项端口权限失败后复验通过，最终相关 32 项通过；旧真实轨迹离线请求字节减少 36.74％，不是实测 Token 收益，本轮新增模型请求为零。
+
+## 2026-10-09 新架构真实返修结果
+
+[素材笔记检索真实验证](evidence/material-search-repair-deepseek-real-20261009.md) ：真实 DeepSeek thinking 沿新流程自主修复隔离素材平台的注入缺陷，15 HTTP／629,781 Token，原测试独立复测 Node 149／149、真实浏览器 55 条通过，系统待用户验收。无人工改码，原平台及旧 220 次计数保持。成本偏高，不能由单例宣称稳定能力或 Token 收益。下文机制验证条目保留当时证据边界。
+
+## 2026-10-09 搜索与上下文当前状态
+
+2026-10-09 第三批已实现及验证：新主会话增加授权范围字面搜索、50 条分页与版本校验、默认 200 行读取、实际可见范围去重及稳定完整批次接力。全套 399 项通过后再完成两项读取门禁修正，最终相关 53 项通过；固定模型驱动真实 Docker／HTTP／Chromium 合成链路到待验收。离线同视图请求字节 21,790→12,391，不是实测 Token 收益。真实模型新架构返修仍未验证。详见 [第三批验证](evidence/repair-search-context-validation-20261009.md) 。
+
+
+## 面试材料
+
+[面试讲解与证据索引](INTERVIEW_GUIDE.md) ：用户委托记录，串联真实失败、架构取舍、实现证据和简历措辞。不能替代真实进度或将合成验证描述为真实模型完成。
+
+## 2026-10-09 连续会话当前状态
+
+2026-10-09 第二批已实现：新返修直接进入任务级连续主会话，任务 product 范围写权限、计划／决定状态、成对回答、跨阶段协议恢复和测试 Diff 审查。全套 388 项通过，真实 Docker／Chrome 合成集成到待验收，执行及审查为固定响应；真实模型返修与成本收益未验证。详见 [第二批验证](evidence/repair-session-validation-20261009.md) 。下一批是受控搜索与有效上下文。
+
+
+## 2026-10-09 当前实现与运行状态
+
+2026-10-09，Sandbox v1 真实隔离探针与合成集成通过，全套 376 项通过。profile 绑定当前源码、镜像、Docker 环境和原始证据，检查通过后新 repair-v1 入口可用；环境或证据变化则关闭。正式空闲 API／Worker 已加载，原任务、schema、产品和旧调用计数保持。真实模型返修未验证；第二批连续会话／任务范围写权限状态见当前实施记录。详见 [真实验证记录](evidence/sandbox-isolation-real-20261009.md) 。
+
+
+## 已确认返修增量的第一批（2026-10-05）
+
+有效第一批规则见 `DEV_DESIGN.md`、`ARCHITECTURE.md` 顶部。`backend/app/runtime/repair_runtime.py` 保存显式新尝试、提交版本、固定阶段和实际请求预算；旧任务不自动生成这些记录。Docker 隔离与统一 Sandbox 已实现及真实工具验证，真实 `repair_request` 仅在当前本机 profile 核验通过时放行，否则返回 409／`repair_execution_isolation_pending`；机制夹具不能作为启用依据。
+
+任务工作区新增程序专有 `evidence/repair-runtime-v1.json`、`repair-authorization-<id>.json`、`repair-attempt-<event_id>-runtime.json`、`repair-attempt-<event_id>-<submission_number>-submission.json`、对应 `-validation.json`。授权由运行控制准备并核对原累计请求，不由客户端任意写额度；runtime 原子更新，旧尝试与每次提交不覆盖。目标账本、需求、授权、阶段及审计不能由模型修改。连续 session 检查点尚属第二批。
+
+本轮证据见 [固定收尾机制验证](evidence/repair-v1-fixed-validation-20261005.md) 。真实模型、真实缺陷修复和成本优势尚未验证；未续跑旧素材平台。
+
 本目录用于用户设计、用户明确委托创建的设计文档、明确标注的 AI 评审及必要验证证据。
 
 ## 设计文档
 
+### 2026-10-08 项目 Sandbox
+
+[Sandbox 架构与接口增量](SANDBOX_V1_AI_DRAFT.md) ：AI 起草，用户已确认接口及状态并授权实施。复用既有 Runner／快照／预览，不新增多后端框架或模型调用预算。运行验证状态见 ROADMAP。
+
+[Sandbox 接入记录](evidence/sandbox-integration-20261008.md) ：接口与流程代码接入、机制回归、Docker daemon 阻塞及未验证事项。不得以机制回归替代隔离探针。
+
+### 2026-10-05 Docker 执行隔离细化
+
+用户已确认该设计并开始实施。新增 `runtime-images/website-repair/` 只保存镜像 Dockerfile、固定控制程序、版本配置和 seccomp 来源，不放产品／凭据／实验数据。运行快照与容器结果仍在各 Task 的 isolation／evidence；隔离验证记录及 profile 存在 `workspace/experiments/docker-isolation-20261005/`，沿用忽略规则。该实验仅合成数据、零模型预算，不迁移旧任务。
+
+[Docker 隔离设计](REPAIR_DOCKER_ISOLATION_V1_AI_DRAFT.md) 定义已确认的快照／挂载、凭据、断网回环测试与宿主预览、镜像／浏览器、运行限制、恢复及启用探针。实施进行中，当前隔离门禁不解除，真实调用预算不增加。[实施记录](evidence/docker-isolation-implementation-20261005.md) 区分机制测试与实际隔离探针。
+
 ### 2026-10-05 已有网站返修草案
 
-用户于 2026-10-05 明确确认本组 AI 起草的返修增量方案，待分批实施；现有运行需求、架构和 Dev Design 保持，实施各批前同步有效规范。首版限本项目已有网站任务，先实现固定验证收尾，再在执行隔离确认后启用连续会话与任务范围权限，随后验证完整交付和成本。
+用户于 2026-10-05 明确确认本组 AI 起草的返修增量方案，第一批已实施并机制验证，有效规范已同步；后续待实施，真实新模式未启用。首版限本项目已有网站任务，执行隔离确认后再启用连续会话与任务范围权限，随后验证完整交付和成本。
 
 - [产品范围草案](REPAIR_PRODUCT_V1_AI_DRAFT.md) ：普通用户流程、支持范围与成功标准。
 - [架构草案](REPAIR_ARCHITECTURE_V1_AI_DRAFT.md) ：一个主要执行会话、程序验证、独立目标审查、预算与恢复边界。

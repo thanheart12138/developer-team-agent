@@ -57,16 +57,30 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
             candidate = root / f"product-v{latest_product_run.attempt}-candidate.md"
             legacy_draft = root / f"product-v{latest_product_run.attempt}-draft.md"
             product_document_available = candidate.is_file() or legacy_draft.is_file()
+    from .runtime.repair_runtime import load as load_repair
+    repair = load_repair(Path(task.workspace_path)) if task.workspace_path else None
     return TaskResponse(task_id=task.id, status=task.status.value, cur_step=task.cur_step.value,
                         latest_message_id=latest, artifact_available=available,
                         product_document_available=product_document_available,
-                        result_url=task.result_url, failure_reason=task.failure_reason)
+                        result_url=task.result_url, failure_reason=task.failure_reason,
+                        task_version=task.version, execution_mode=repair.get("workflow") if repair else None,
+                        repair_state=repair.get("state") if repair else None,
+                        stop_reason=repair.get("stop_reason") if repair else None,
+                        budget=({key: value for key, value in repair["budget"].items() if key != "requests"}
+                                if repair else None), submission_id=repair.get("submission_id") if repair else None,
+                        repair_decision=(repair['session']['decisions'][-1]
+                                         if repair and repair['state'] == 'waiting_decision' else None))
 
 
 @router.post("/tasks/{task_id}/events", status_code=202)
 def create_event(task_id: int, payload: CreateEventRequest, db: Session = Depends(get_db)):
     # 记录用户事件并提交给 Worker 后续消费。
     require_task(db, task_id)
+    if payload.type == "repair_request":
+        from .runtime.repair_runtime import isolation_ready
+        if not isolation_ready():
+            # 入口明确反馈阻塞，不把尚未允许执行的请求显示为已开始。
+            raise HTTPException(409, detail={"code": "repair_execution_isolation_pending"})
     event = Event(task_id=task_id, type=payload.type, data=payload.data)
     db.add(event)
     task = require_task(db, task_id)

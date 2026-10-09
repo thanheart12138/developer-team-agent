@@ -48,6 +48,7 @@ class ToolRuntime:
             return ToolResult(call.call_id, call.tool_name, "failed", error="unknown_tool")
         try:
             # 操作目的仅供摘要登记，不改变底层工具参数与执行语义。
+            self._active_call_id = call.call_id
             parameters = {key: value for key, value in call.parameters.items() if key != "description"}
             return ToolResult(call.call_id, call.tool_name, "succeeded", handler(**parameters))
         except Exception as exc:
@@ -122,6 +123,11 @@ class ToolRuntime:
 
     def _exec(self, action: str, command: str | None = None, process_id: int | None = None) -> dict:
         # 运行命令或管理生成软件的后台进程。
+        from .sandbox import for_workspace
+        isolated = for_workspace(self.workspace)
+        if isolated is not None:
+            # 新模式没有宿主执行兜底；底层不可用时由工具协议返回失败。
+            return isolated.execute(action, command, self._active_call_id)
         # 子进程沿用 Worker 的 Python 环境，避免 Node 再调用系统 Python 丢失 Playwright。
         environment = {**os.environ, "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")}
         if action == "run":

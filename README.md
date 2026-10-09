@@ -1,5 +1,31 @@
 # AI Agent 工程实践项目
 
+## 当前真实返修与面试入口
+
+2026-10-10 用户委托验收与版本整理完成技术验证：本轮冻结素材平台原Node150项／实际Chromium60条通过，系统完整436项回归及前端构建通过，零模型调用。原生UI额外手工操作未完成，原因与证据边界已记录；系统仍待用户验收，未代发批准事件。已补忽略凭据副本目录，准备明确Git候选清单和源码／生成产品本地归档；不提交推送、不改正式任务。[验收与版本清单](docs/evidence/acceptance-version-20261010.md) 。
+
+2026-10-09 无审查新流程真实单缺陷返修完成：任务详情关联素材缺失由DeepSeek thinking自主修复，13／20HTTP（执行13、审查0）、396,416Token、67.1秒，无人工改码／纠错。原断言独立Docker Node150／150及实际浏览器60条通过，网站60777首页GET200匹配。目标仍open、系统待用户验收；第10轮自测通过、第13轮提交，仍3轮收尾调查。旧七轮runtime与旧220保持，机制未在实验中改变、正式服务未操作。不追加调用；单缺陷与历史两缺陷范围不同，不换算成本降幅，成本问题未解决。证据见 [真实验证](docs/evidence/material-task-detail-no-review-deepseek-real-20261009.md) 。
+
+2026-10-09 用户确认取消新 repair-v1 的独立模型目标／覆盖审查及审查预留。显式提交后执行全量测试、启动、实际浏览器验证，再等待用户验收；原始目标保持 open 到匹配提交／版本的用户批准，以 user_acceptance 记录关闭依据。总 HTTP 上限不变，旧尝试／原授权／审查记录／提示词绑定保留，不自动迁移或续跑。117 项相关回归及真实本地浏览器夹具通过；空闲服务已加载 API96441／Worker96442，五项状态指纹保持。零新增模型调用，真实 Token 收益未验证。详见 [验证记录](docs/evidence/repair-no-model-review-validation-20261009.md) 。以下真实调用数字为包含审查的历史证据。
+
+截至2026-10-09，新repair-v1已完成素材检索及一个两文件跨模块故障的真实DeepSeek返修到待验收，未代用户最终验收。最新跨模块案例13HTTP／396,608Token，无人工改码或纠错，原断言独立Node150项与Chromium60条通过；收尾效率仍待优化，不代表任意项目稳定交付。
+
+[面试演示指南](docs/DEMO_GUIDE.md) 提供固定静态网站、零模型启动、具体交互及只读恢复核查；当前地址为 http://127.0.0.1:51881/ 。完整真实进度与局限见 [ROADMAP](ROADMAP.md) ，下文阶段性「真实返修未验证」保留为当时历史。
+
+## Sandbox v1 当前能力
+
+首版支持已有原生网站的固定 Node／HTTP／Chromium 测试。新 `repair-v1` 的自测与提交验证统一经过 SandboxRuntime；旧任务保持原路径，未自动隔离。执行容器只读、断网、非 root，宿主以可信静态服务预览同一冻结快照。浏览器脚本需显式使用 `chromium_sandbox=True`。
+
+构建命令：`docker build -t ai-agent-product/website-repair:pw-1.55.0-v1 runtime-images/website-repair`。构建不会自动启用入口；受控真实探针成功后才保存 `workspace/experiments/docker-isolation-20261005/profile.json`。源码、镜像、环境或证据变化会使启用记录失效，不应手工填成功字段绕过检查。
+
+当前已通过真实隔离与合成流程验证。第二批增加连续主会话、任务产品写权限与明确提问／回答，执行及审查采用固定响应，真实模型返修未验证。运行记录见 [Sandbox 真实验证](docs/evidence/sandbox-isolation-real-20261009.md) 。
+
+## 2026-10-05 返修升级第一批
+
+显式新返修方式已增加全产品／需求版本提交、程序固定测试→启动→浏览器→独立原目标审查、实际 HTTP 累计请求守卫和独立预算停止原因。旧任务保持原流程，未自动迁移。API 可返回执行方式、返修阶段、当前提交和预算；新方式的验收携带提交 ID 与任务版本。
+
+Sandbox v1 已按固定 Docker 后端实现，真实探针与合成集成通过；`repair_request` 仅在本机启用 profile 匹配当前控制源码、证据、镜像和 Docker 环境时放行，否则返回 `409 repair_execution_isolation_pending`。当前是机制实现和本地验证，不能据此声称已完成真实新模式返修。连续执行会话与任务产品范围写权限已实现；受控搜索、按实际可见范围读取去重和完整批次上下文接力已实现及机制／真实工具合成验证，真实模型效果未验证。详细设计见 `docs/DEV_DESIGN.md` 顶部，验证见 `docs/evidence/repair-v1-fixed-validation-20261005.md`。
+
 第一目标是通过亲自做产品和工程决策，检验并提升 AI Agent 工程能力；第二目标是自用项目成果。
 
 这是独立的新项目，不自动继承旧学习仓库或旧「AI 软件开发团队模拟器」的教程门禁、阶段划分、角色数量、架构、技术栈或实现。
@@ -116,3 +142,7 @@ npm run dev
 Set-Location frontend
 npm run build
 ```
+
+连续会话实现及验证见 [第二批验证](docs/evidence/repair-session-validation-20261009.md) 。
+
+受控搜索与上下文验证见 [第三批记录](docs/evidence/repair-search-context-validation-20261009.md) ，面试讲解见 [面试证据索引](docs/INTERVIEW_GUIDE.md) 。

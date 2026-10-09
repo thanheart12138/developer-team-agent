@@ -348,12 +348,20 @@ class UnitTools(ToolRuntime):
 
     def _write(self, path: str, content: str, overwrite: bool) -> dict:
         # 写入前按实际解析路径检查当前单元所有权。
+        from .repair_runtime import load as load_repair
+        repair = load_repair(self.workspace)
+        if repair and repair["state"] != "executing":
+            raise ValueError('repair_submission_frozen')
         if self._safe_path(path) not in self.writable:
             raise ValueError('unit_write_outside_owned_files')
         return super()._write(path, content, overwrite)
 
     def _replace(self, path: str, old: str, new: str) -> dict:
         # 精确替换与整文件写入使用相同的单元所有权边界。
+        from .repair_runtime import load as load_repair
+        repair = load_repair(self.workspace)
+        if repair and repair["state"] != "executing":
+            raise ValueError('repair_submission_frozen')
         if self._safe_path(path) not in self.writable:
             raise ValueError('unit_write_outside_owned_files')
         return super()._replace(path, old, new)
