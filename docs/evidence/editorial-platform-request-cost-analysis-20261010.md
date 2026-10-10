@@ -12,6 +12,8 @@
 
 ## 证据与统计口径
 
+2026-10-11 用户授权完整现场上传：归档为 [editorial-platform-fullflow-20261010.tar.gz](archives/editorial-platform-fullflow-20261010.tar.gz) ，附 [逐文件校验清单](archives/editorial-platform-fullflow-20261010.manifest.json) 。包含1,892文件，压缩32,030,085字节，逐文件内容及源文件二次校验通过。归档SHA256：`bf19f58679f33d23c25e78b33e98c168f7c412a369b8af3dbbd343b7ee1a774f`。本地原目录仍由Git忽略，仓库保存其压缩快照。
+
 原始现场：`workspace/experiments/editorial-platform-fullflow-20261010/`。
 
 - `http-ledger.json`：发送前持久记账，183 条；`call-count.json` 为 183，总授权 200，失败和重试也计入。
