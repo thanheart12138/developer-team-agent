@@ -173,6 +173,8 @@ PYTHONPATH=. .venv/bin/python tests/content_workbench_baseline.py --root workspa
 
 ## 评审与证据
 
+- `docs/evidence/editorial-platform-request-cost-analysis-20261010.md`：新平台183次真实请求离线成本分析，已知16,349,587 Token及一次未知用量；输入／输出／思考／缓存、五卡及返修、执行阶段、重复读取和上下文重传分开统计。保留干预及独立验收未完成边界；完整CSV及复算脚本在原持久实验目录，本次零新增模型调用。
+
 - `docs/evidence/calculator-rounding-repair-real-20261003.md`：误选测试对象的历史实验，六次 DeepSeek thinking／230,075 Token 修旧计算器舍入，实际结果保留；用户目标是素材管理平台，不执行其切片／Planner 路径，排除出目标产品和机制验证，不安排计算器验收。
 - `docs/evidence/calculator-rounding-repair-blocked-20261003.md`：现存失败 Task 26 的三个舍入错误由独立 Node／Chrome 复现，原 23 项漏测；持久副本及原计数已保留，原 Worker 程序测试自然进入返修。真实 DeepSeek 六次上限命令被自动审批拒绝，具体数据外发授权待确认，零调用；旧流程没有显式提交门禁，不宣称新切片交接或模型修复通过。
 - `docs/evidence/formal-service-recovery-20261003.md`：原 MySQL 正式数据与全部 Trace 详情文件仍在；恢复 API 8001、前端 5173 和空闲单 Worker，九条只读服务／真实 Chrome 检查通过，状态／逻辑计数／schema／文件哈希保持，零模型调用。旧临时素材平台与实验断点未恢复，不能补记目标闭合或用户验收。
