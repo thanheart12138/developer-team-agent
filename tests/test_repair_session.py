@@ -24,6 +24,122 @@ def prepare(root):
     return session.RepairTools(root)
 
 
+def enable_completion(root):
+    """在隔离夹具明确开启新协议，不迁移旧会话。"""
+    tools = prepare(root)
+    state = repair.load(root)
+    state['session'].update(context_contract='v2', completion_tool_enabled=True)
+    repair.save(root, state)
+    return tools
+
+
+def test_verify_and_submit_requires_explicit_new_protocol(attempt):
+    """旧会话不能调用新收尾工具，普通自测通过也不会自动提交。"""
+    root, _, _, _, _ = attempt
+    tools = prepare(root)
+    assert tools._run_unit_tests()['passed']
+    assert tools.submitted_hashes is None
+    result = tools.execute(ToolCall('finish', 'verify_and_submit', {'description': '明确请求提交'}))
+    assert result.status == 'failed' and result.error == 'repair_completion_tool_not_enabled'
+    assert tools.submitted_hashes is None
+
+
+def test_verify_and_submit_success_restore_and_changed_version(attempt):
+    """真实固定测试通过后同调用显式提交，恢复需核对当前文件。"""
+    root, _, _, _, _ = attempt
+    tools = enable_completion(root)
+    result = tools.execute(ToolCall('finish', 'verify_and_submit', {'description': '业务完成，验证后提交'}))
+    assert result.status == 'succeeded' and result.output['submitted']
+    assert result.output['self_test']['passed'] and tools.submitted_hashes == tools.submission_versions()
+    restored = session.RepairTools(root)
+    assert restored.restore_submission(result.output)
+    (root / 'product/index.html').write_text('<h1>changed after submission</h1>')
+    assert not session.RepairTools(root).restore_submission(result.output)
+
+
+def test_verify_and_submit_failure_allows_repair(attempt):
+    """测试失败返回真实失败，保留写入与再次显式收尾能力。"""
+    root, _, _, _, _ = attempt
+    tools = enable_completion(root)
+    (root / 'product/app.test.js').write_text("const {test}=require('node:test'); test('failure',()=>{throw Error('broken')});")
+    failed = tools.execute(ToolCall('red', 'verify_and_submit', {'description': '请求测试并提交'}))
+    assert failed.status == 'succeeded' and not failed.output['submitted']
+    assert not failed.output['self_test']['passed'] and tools.submitted_hashes is None
+    tools._write('product/app.test.js', "const {test}=require('node:test'); test('fixed',()=>{});", True)
+    green = tools.execute(ToolCall('green', 'verify_and_submit', {'description': '修复后明确提交'}))
+    assert green.output['submitted']
+
+
+def test_verify_and_submit_rejects_changes_during_test(attempt, monkeypatch):
+    """自测期间文件变化使证据失效，即使测试进程绿灯也不能提交。"""
+    root, _, _, _, _ = attempt
+    tools = enable_completion(root)
+    original = tools._run_unit_tests
+
+    def changed_test():
+        """在测试结束和提交校验之间注入并发文件变更。"""
+        result = original()
+        (root / 'product/index.html').write_text('<h1>concurrent change</h1>')
+        return result
+
+    monkeypatch.setattr(tools, '_run_unit_tests', changed_test)
+    result = tools.execute(ToolCall('finish', 'verify_and_submit', {'description': '明确提交'}))
+    assert result.status == 'succeeded' and not result.output['submitted']
+    assert tools.submitted_hashes is None
+
+
+@pytest.mark.parametrize('nonterminal', [False, True])
+def test_new_completion_main_loop_keeps_plan_and_requires_terminal_intent(attempt, monkeypatch, nonterminal):
+    """实际主循环保存修法，拒绝非尾部收尾，模型明确请求后测试提交。"""
+    from backend.app.runtime.contracts import ModelResult
+    from backend.app.models import TaskStatus
+    from backend.app.runtime.prompt_registry import bind_versions, active_versions
+    root, db, task, _, _ = attempt
+    requests = []
+    first = [('update_plan', {'steps': ['修复fixture后验证提交'], 'reason': '已确定修改',
+        'findings': ['当前标题需修改'], 'open_questions': [], 'next_action': '修改index后验证提交'}),
+        ('replace', {'path': 'product/index.html', 'old': 'fixture', 'new': 'fixed'})]
+    if nonterminal:
+        first += [('verify_and_submit', {'description': '请求提交'}), ('read', {'path': 'product/index.html'})]
+    batches = [first, [('verify_and_submit', {'description': '业务修改完成，测试后提交'})]]
+
+    class FixedModel:
+        """固定工具轨迹验证程序契约，不冒充真实模型能力。"""
+        provider = 'deepseek'
+        model_name = 'fixed-completion'
+
+        def build_payload(self, request):
+            """提供机制测试需要的请求身份。"""
+            return {'messages': []}
+
+        def call(self, task_id, request):
+            """确认新工具与当前修法交接后发出显式收尾意图。"""
+            requests.append(request)
+            assert 'verify_and_submit' in [item['function']['name'] for item in request.tools]
+            if len(requests) == 2:
+                progress = request.context['work_progress']
+                assert progress['value']['findings'] == ['当前标题需修改']
+                assert progress['value']['open_questions'] == []
+                assert progress['applicability'] == 'needs_review'
+            batch = batches.pop(0)
+            return ModelResult(request.request_id, 1, '', [ToolCall(f'finish-{len(requests)}-{i}', name, parameters)
+                for i, (name, parameters) in enumerate(batch)], 'tool_calls', {'reasoning_content': 'fixture reasoning'})
+
+    monkeypatch.setattr(worker, 'create_model_runtime', lambda *args: FixedModel())
+    task.status = TaskStatus.running
+    db.commit()
+    with bind_versions({**active_versions(), 'repair-executor': 'v6'}):
+        assert worker.process_task(db)
+    state = repair.load(root)
+    assert state['state'] == 'submitted' and state['session']['completion_tool_enabled']
+    assert len(requests) == 2
+    history = json.loads(next((root / 'evidence').glob('repair-session-*-checkpoint.json')).read_text())
+    if nonterminal:
+        assert next(row for row in history if row['action']['tool_name'] == 'verify_and_submit')['result']['status'] == 'failed'
+    assert history[-1]['action']['tool_name'] == 'verify_and_submit'
+    assert history[-1]['result']['output']['self_test']['passed']
+
+
 def facts_fixture(root, tools, history):
     """用真实文件版本构建新视图，旧摘要仅作为冲突输入。"""
     state = repair.load(root)
@@ -257,6 +373,22 @@ def test_entry_bypasses_planner_and_keeps_original_goal(attempt, monkeypatch):
     assert json.loads((root/'evidence/repair-objectives.json').read_text())['items'][-1]['original_feedback'] == '修复 fixture'
 
 
+def test_selected_prompt_version_is_frozen_before_model_call(attempt, monkeypatch):
+    """候选或固定历史版本不得被创建会话时的激活版本覆盖。"""
+    root, db, task, _, _ = attempt
+    monkeypatch.setattr(session, 'select_prompt', lambda state: session.PREVIOUS_NO_REVIEW_PROMPT)
+
+    def stop_after_binding(*args, **kwargs):
+        """在实际模型发送前检查身份，避免测试产生外部请求。"""
+        assert args[3].version == 'v4'
+        assert repair.load(root)['session']['prompt_versions']['repair-executor'] == 'v4'
+        raise RuntimeError('binding_checked')
+
+    monkeypatch.setattr(worker, 'model_tool_loop', stop_after_binding)
+    with pytest.raises(RuntimeError, match='binding_checked'):
+        session.execute(db, task, SimpleNamespace())
+
+
 def test_validation_failure_returns_to_same_protocol(attempt, monkeypatch):
     """真实 Node 自测配合固定模型响应，验证跨 Run 思考／工具协议保持。"""
     from backend.app.runtime.contracts import ModelResult
@@ -305,6 +437,71 @@ def test_validation_failure_returns_to_same_protocol(attempt, monkeypatch):
     assert json.loads(checkpoint.read_text())[:len(original)]==original
     assert any(m.get('reasoning_content')=='thought-1' for m in seen[2])
     assert not calls
+
+
+@pytest.mark.parametrize('provider', ['kimi', 'openrouter'])
+def test_other_provider_repair_history_survives_batches_and_restore(attempt, monkeypatch, provider):
+    """实际主循环恢复保留两批工具正文与助手内容，不发送DeepSeek思考字段。"""
+    from backend.app.models import StepRun, Step, StepStatus
+    from backend.app.runtime.contracts import ModelResult
+    from backend.app.runtime.model import build_messages
+    from backend.app.runtime.prompt_registry import load_prompt
+    from pathlib import Path
+    root, db, task, _, _ = attempt
+    tools = prepare(root)
+    state = repair.load(root)
+    state['session']['provider'] = provider
+    repair.save(root, state)
+    run = StepRun(task_id=task.id, step=Step.develop, attempt=1, status=StepStatus.running)
+    db.add(run)
+    db.flush()
+    run.checkpoint_path = str(root / 'evidence/common-protocol-checkpoint.json')
+    db.commit()
+    requests = []
+
+    class FixedModel:
+        """在真实Worker中捕获实际组装消息，测试不发送网络请求。"""
+        model_name = 'common-history-fixture'
+
+        def build_payload(self, request):
+            """复用Kimi与OpenRouter实际采用的通用消息序列化。"""
+            return {'messages': build_messages(request)}
+
+        def call(self, task_id, request):
+            """以确定读取和完成文本检查跨轮上下文，思考不得泄漏。"""
+            messages = self.build_payload(request)['messages']
+            requests.append(messages)
+            index = len(requests)
+            if index == 1:
+                actions = [ToolCall('read-a', 'read', {'path': 'product/index.html'}),
+                           ToolCall('read-b', 'read', {'path': 'docs/product.md'})]
+            elif index == 2:
+                actions = []
+            else:
+                actions = [ToolCall('read-c', 'read', {'path': 'product/implementation.md'})]
+            return ModelResult(request.request_id, 1, '助手意图' + str(index), actions,
+                               'tool_calls' if actions else 'stop', {'reasoning_content': '不得传给其他供应商'})
+
+    FixedModel.provider = provider
+    monkeypatch.setattr(worker, 'create_model_runtime', lambda *args: FixedModel())
+    context = {'repair_session': True, 'session_id': 'fixture', 'unit_file_scope': tools.self_test_files,
+               'original_feedback': '修复fixture', 'unresolved_acceptance_objectives': []}
+    schemas = [session.schema('read', '读取授权正文', {'path': {'type': 'string'}}, ['path'])]
+    # 第一批实际执行后返回，再从同一检查点恢复，而非重新初始化任务。
+    completed = iter([False, True])
+    worker.model_tool_loop(db, task, run, load_prompt('repair-executor'), '修复fixture', context, tools,
+                           stop_when=lambda: next(completed), tool_schemas=schemas, history_key='fixture-common')
+    worker.model_tool_loop(db, task, run, load_prompt('repair-executor'), '修复fixture', context,
+                           session.RepairTools(root), stop_when=lambda: True,
+                           tool_schemas=schemas, history_key='fixture-common')
+    assert len(requests) == 3
+    for messages in requests[1:]:
+        assert [m['tool_call_id'] for m in messages if m['role'] == 'tool'] == ['read-a', 'read-b']
+        assert [c['id'] for c in messages[2]['tool_calls']] == ['read-a', 'read-b']
+        assert '<h1>fixture</h1>' in next(m['content'] for m in messages if m['role'] == 'tool')
+        assert not any('reasoning_content' in m for m in messages)
+    assert requests[2][-1] == {'role': 'assistant', 'content': '助手意图2'}
+    assert not any('reasoning_content' in x for x in json.loads(Path(run.checkpoint_path).read_text()))
 
 
 def test_self_test_reuses_current_success_after_restore(attempt, monkeypatch):

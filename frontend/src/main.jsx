@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
+import PromptManager from "./PromptManager";
 
 const API = import.meta.env.VITE_API_URL || "/api";
 const STEPS = ["product_docs", "architecture_docs", "dev_design", "develop", "test", "start_product", "verify_product"];
@@ -161,4 +162,4 @@ function Approval({ version, document, send }) { const [feedback, setFeedback] =
 function Acceptance({ send }) { const [feedback, setFeedback] = useState(""); return <section className="action"><h2>人工验收</h2><textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="描述期望行为、实际行为和复现步骤" /><div><button onClick={() => send("acceptance_result", { approved: true, feedback: "" })}>验收通过</button><button className="secondary" disabled={!feedback.trim()} onClick={() => { send("acceptance_result", { approved: false, feedback: feedback.trim() }); setFeedback(""); }}>报告问题</button></div></section>; }
 function ChangeRequest({ send }) { const [feedback, setFeedback] = useState(""); return <section className="action"><h2>给现有产品增加功能</h2><textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="说明新增什么、为什么需要、怎么算成功" /><button disabled={!feedback.trim()} onClick={() => { send("change_request", { feedback: feedback.trim() }); setFeedback(""); }}>提交功能需求</button></section>; }
 
-createRoot(document.getElementById("root")).render(<React.StrictMode><App /></React.StrictMode>);
+createRoot(document.getElementById("root")).render(<React.StrictMode>{new URLSearchParams(window.location.search).get("view") === "prompts" ? <PromptManager /> : <><nav className="management-link"><a href="/?view=prompts">提示词管理与评测</a></nav><App /></>}</React.StrictMode>);

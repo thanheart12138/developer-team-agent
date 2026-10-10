@@ -30,6 +30,8 @@ def build_messages(request: ModelRequest, include_reasoning: bool = False) -> li
     if include_reasoning:
         # 当前会话原样续传完整思考；只去掉已由协议工具消息提供的重复结果正文。
         tool_history = [entry for entry in tool_history if "reasoning_content" in entry]
+    if tool_history:
+        # 通用工具历史已携带真实结果时只引用，避免其他供应商收到重复正文。
         results = {entry["action"]["call_id"]: entry["result"] for entry in tool_history
                    if entry.get("action") and entry.get("result")}
         context["current_requested_data"] = [
@@ -85,17 +87,19 @@ def build_messages(request: ModelRequest, include_reasoning: bool = False) -> li
         entry = tool_history[index]
         action = entry.get("action")
         result = entry.get("result")
-        if include_reasoning and not action and "assistant_content" in entry:
-            # 带工具请求中即使上轮未调用工具，后续继续时也要续传该轮思考。
-            messages.append({"role": "assistant", "content": entry["assistant_content"],
-                             "reasoning_content": entry["reasoning_content"]})
+        if not action and "assistant_content" in entry:
+            # 普通助手响应也保留执行意图；思考字段仅按供应商协议追加。
+            assistant = {"role": "assistant", "content": entry["assistant_content"]}
+            if include_reasoning:
+                assistant['reasoning_content'] = entry['reasoning_content']
+            messages.append(assistant)
             index += 1
             continue
         if not action or not result:
             index += 1
             continue
         group = [entry]
-        if include_reasoning and entry.get("model_request_id"):
+        if entry.get("model_request_id"):
             # 同一响应的多个工具调用属于一条 assistant 消息，随后逐项追加工具结果。
             while index + len(group) < len(tool_history):
                 following = tool_history[index + len(group)]

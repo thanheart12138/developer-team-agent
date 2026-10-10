@@ -1,0 +1,196 @@
+{
+  "contract": {
+    "purpose": "你是已有产品验收反馈的 Next Action Planner。用户描述只是线索；对照实际存在的正式文档、明确保存的设计跳过依据和已调查证据，直接决定下一行动。被跳过的文档不是空白正式设计；若新问题表明必须补设计，可选择对应更新。若要判断代码实现缺陷，先 inspect 相关产品代码；证据不足可继续 inspect 或 clarify。只返回一个 JSON 对象：action、path、reason、evidence、changes、confidence、clarifying_question。inspect 是返回给程序的 JSON 行动，不是真实工具调用；例如 {\"action\":\"inspect\",\"path\":\"product/app.js\",\"reason\":\"核对页面操作\",\"evidence\":[],\"changes\":[],\"confidence\":0.8,\"clarifying_question\":null}。不要输出 tool_call、tool_calls、Markdown 或代码块。action 必须在 allowed_actions 中；inspect 的 path 必须在 remaining_files 中，其他行动的 path 为 null。编号反馈逐条解释，选择所有条目中最早失效的行动。改变或新增产品可见行为选 update_requirement；需求不变但架构决策缺失或冲突选 update_architecture；架构成立但实现细节设计必须补充或冲突选 update_dev_design；正式需求和现有设计或跳过依据均支持期望行为而代码不符才选 modify_code。不能只凭“缺陷”一词认定代码问题，不能把用户描述的现状当期望。update_requirement 的 changes 每项须含 current_behavior、expected_behavior 和非空 acceptance_examples；clarify 须只提出一个具体问题。不得写文件或执行命令。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/acceptance-action-planner/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "kind": "normal",
+      "level": "normal",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "feedback": "素材保存按钮点了没效果",
+          "formal_product": "点击保存后新增素材",
+          "allowed_actions": [
+            "inspect",
+            "clarify",
+            "modify_code"
+          ],
+          "remaining_files": [
+            "product/materials.js"
+          ],
+          "inspected_files": []
+        }
+      },
+      "expected": "未调查代码，先inspect唯一相关文件，不凭缺陷描述直接modify_code。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "path",
+            "reason",
+            "evidence",
+            "changes",
+            "confidence",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "inspect"
+        },
+        {
+          "op": "equals",
+          "path": "output.path",
+          "value": "product/materials.js"
+        },
+        {
+          "op": "manual",
+          "reason": "inspect为JSON行动，不是真实tool_call。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"inspect\", \"path\": \"product/materials.js\", \"reason\": \"先核对保存实现。\", \"evidence\": [], \"changes\": [], \"confidence\": 0.8, \"clarifying_question\": null}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-action-planner/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "boundary",
+      "kind": "boundary",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "feedback": "我希望它不这样",
+          "allowed_actions": [
+            "clarify"
+          ],
+          "remaining_files": []
+        }
+      },
+      "expected": "行为方向不明，clarify只问一个具体问题。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "path",
+            "reason",
+            "evidence",
+            "changes",
+            "confidence",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "clarify"
+        },
+        {
+          "op": "equals",
+          "path": "output.path",
+          "value": null
+        },
+        {
+          "op": "manual",
+          "reason": "不能自行推断目标或检查不允许的文件。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"clarify\", \"path\": null, \"reason\": \"缺现状和期望方向。\", \"evidence\": [], \"changes\": [], \"confidence\": 0.2, \"clarifying_question\": \"目前出现什么行为，希望改成什么结果？\"}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-action-planner/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "counterexample",
+      "kind": "counterexample",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "feedback": "1。保存按钮失效。2。新增团队共享。",
+          "formal_product": "仅本地私有素材",
+          "allowed_actions": [
+            "inspect",
+            "update_requirement",
+            "clarify"
+          ],
+          "remaining_files": [
+            "product/materials.js"
+          ]
+        }
+      },
+      "expected": "选择所有条目中最早失效的update_requirement，并保留变更方向及验收例。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "path",
+            "reason",
+            "evidence",
+            "changes",
+            "confidence",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "update_requirement"
+        },
+        {
+          "op": "equals",
+          "path": "output.path",
+          "value": null
+        },
+        {
+          "op": "equals",
+          "path": "output.changes.0.current_behavior",
+          "value": "仅本地私有素材"
+        },
+        {
+          "op": "equals",
+          "path": "output.changes.0.expected_behavior",
+          "value": "团队共享素材"
+        },
+        {
+          "op": "manual",
+          "reason": "逐条解释反馈，不能全部归为代码缺陷。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"update_requirement\", \"path\": null, \"reason\": \"第二项改变产品范围，应先更新需求。\", \"evidence\": [\"原需求仅本地私有\"], \"changes\": [{\"current_behavior\": \"仅本地私有素材\", \"expected_behavior\": \"团队共享素材\", \"acceptance_examples\": [\"两名成员可查看共享素材。\"]}], \"confidence\": 0.9, \"clarifying_question\": null}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-action-planner/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    }
+  ]
+}

@@ -45,3 +45,7 @@ Desktop.ini
 .cursor/
 .agents/
 .aider*
+
+# Prompt management local lock and atomic-write intermediates
+prompts/.management.lock
+prompts/**/*.tmp

@@ -1,0 +1,370 @@
+{
+  "contract": {
+    "purpose": "你负责同一个已有网站返修任务的调查、计划、实现和修复。原始反馈与批准需求是依据，不能弱化断言来通过测试。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。；v6新会话可显式调用verify_and_submit，只有当前固定全量自测通过且实际提交才算完成，调用名本身不能证明成功。",
+    "source": "prompts/repair-executor/v5.md",
+    "role": "task",
+    "variables": {}
+  },
+  "cases": [
+    {
+      "id": "known-cause",
+      "level": "normal",
+      "kind": "normal",
+      "input": {
+        "task": "工作台逾期统计错误：已发布任务不应计入逾期。",
+        "context": {
+          "approved_product": "逾期仅包含未完成且截止日期早于本地今天的任务。",
+          "known_cause": "dashboard从全部任务筛选，而非未完成任务。",
+          "current_version": "v1",
+          "self_test": {
+            "state": "not_tested"
+          }
+        }
+      },
+      "expected": "完成合法修改，主动自测通过，再显式提交。",
+      "forbidden": "反复确认已有结论、未测试提交、修改批准业务规则。",
+      "checks": [
+        {
+          "op": "ordered_action_paths",
+          "value": [
+            [
+              "replace",
+              "run_unit_tests",
+              "submit_unit_for_test"
+            ],
+            [
+              "replace",
+              "verify_and_submit"
+            ]
+          ]
+        },
+        {
+          "op": "manual",
+          "reason": "核对修改确实修复原缺陷，测试与提交绑定当前版本。"
+        }
+      ],
+      "basis": "prompts/repair-executor/v5.md；已批准素材平台需求。",
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "replace",
+            "parameters": {}
+          },
+          {
+            "tool_name": "run_unit_tests",
+            "parameters": {}
+          },
+          {
+            "tool_name": "submit_unit_for_test",
+            "parameters": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "stale-green",
+      "level": "important",
+      "kind": "boundary",
+      "input": {
+        "task": "修复后继续提交。",
+        "context": {
+          "current_version": "v2",
+          "self_test": {
+            "state": "stale",
+            "version": "v1"
+          },
+          "remaining_changes": [],
+          "approved_product": "已发布任务不计逾期；仅未完成且截止早于今天计入。",
+          "current_code": {
+            "product/dashboard/dashboard.js": "// L2 只读投影（工作台）+ 工作台视图（同一业务域合并）\n// 依赖：workbench -> tasks 公共只读接口 + L0 日期工具；视图额外注入 navigate / today / chrome。\nimport { isISODate, toLocalISODate } from '../infra/storage.js';\n\n// 「未完成」= 除「已发布」外的三个状态（与架构 2.3 节一致）。\nexport const UNFINISHED_STATUSES = ['todo', 'writing', 'toPublish'];\nexport const WORKBENCH_STATUS_LABELS = [\n  ['todo', '待写作'],\n  ['writing', '写作中'],\n  ['toPublish', '待发布'],\n  ['published', '已发布'],\n];\n\n// today 允许字符串日期、Date 或返回日期的函数（装配根注入 toLocalISODate）。\nfunction normalizeToday(today) {\n  if (typeof today === 'function') return normalizeToday(today());\n  if (typeof today === 'string' && today !== '') return today;\n  if (today instanceof Date) return toLocalISODate(today);\n  return toLocalISODate();\n}\n\nfunction readDueDate(record) {\n  return record && typeof record.dueDate === 'string' ? record.dueDate : '';\n}\n\n// 逾期 = 未完成且截止日期早于本地当天；无截止日期或日期非法都不计入。\nfunction isOverdue(record, today) {\n  const dueDate = readDueDate(record);\n  return dueDate !== '' && isISODate(dueDate) && dueDate < today;\n}\n\nexport function createWorkbenchModule({ tasks } = {}) {\n  if (!tasks) throw new Error('createWorkbenchModule requires { tasks }');\n  return {\n    // 返回 { unfinished, overdue, counts, total }；只读，不写任何集合。\n    getSummary(today) {\n      const todayDate = normalizeToday(today);\n      const listed = tasks.list();\n      const records = Array.isArray(listed) ? listed : [];\n      const counts = { todo: 0, writing: 0, toPublish: 0, published: 0 };\n      for (const record of records) {\n        if (record && Object.prototype.hasOwnProperty.call(counts, record.status)) {\n          counts[record.status] += 1;\n        }\n      }\n      const unfinished = records.filter(\n        (record) => record && UNFINISHED_STATUSES.includes(record.status),\n      );\n      const overdue = unfinished.filter((record) => isOverdue(record, todayDate));\n      return { unfinished, overdue, counts, total: records.length };\n    },\n  };\n}\n\nfunction fillContainer(container, children) {\n  if (typeof container.replaceChildren === 'function') {\n    container.replaceChildren(...children);\n    return;\n  }\n  while (container.firstChild) container.removeChild(container.firstChild);\n  for (const child of children) container.appendChild(child);\n}\n\nexport function createWorkbenchView({ workbench, navigate, today, chrome } = {}) {\n  if (!workbench || typeof navigate !== 'function') {\n    throw new Error('createWorkbenchView requires { workbench, navigate }');\n  }\n  // 视图只经 navigate 端口切换路由，不自行改 location / history；chrome 由外壳统一处理提示。\n  void chrome;\n\n  let host = null;\n  let doc = null;\n  let nodes = null;\n\n  function make(tag, testid, text) {\n    const element = doc.createElement(tag);\n    if (testid) element.setAttribute('data-testid', testid);\n    if (text !== undefined) element.textContent = text;\n    return element;\n  }\n\n  function build() {\n    const root = make('section', 'workbench-view');\n    root.setAttribute('class', 'workbench-view');\n\n    const summary = make('div', 'workbench-summary');\n    summary.setAttribute('class', 'workbench-summary');\n\n    const unfinishedLine = make('p', 'workbench-unfinished-line');\n    unfinishedLine.setAttribute('class', 'workbench-summary-line');\n    unfinishedLine.appendChild(make('span', null, '未完成任务数：'));\n    const unfinishedCount = make('span', 'workbench-unfinished-count', '0');\n    unfinishedLine.appendChild(unfinishedCount);\n\n    const overdueLine = make('p', 'workbench-overdue-line');\n    overdueLine.setAttribute('class', 'workbench-summary-line');\n    overdueLine.appendChild(make('span', null, '逾期任务数：'));\n    const overdueCount = make('span', 'workbench-overdue-count', '0');\n    overdueLine.appendChild(overdueCount);\n\n    const statusCounts = make('ul', 'workbench-status-counts');\n    statusCounts.setAttribute('class', 'workbench-status-counts');\n    const countNodes = {};\n    for (const [status, label] of WORKBENCH_STATUS_LABELS) {\n      const item = make('li', 'workbench-status-count-item');\n      item.setAttribute('class', 'workbench-status-count-item');\n      item.setAttribute('data-status', status);\n      item.appendChild(make('span', null, label + '：'));\n      const value = make('span', 'workbench-status-count-' + status, '0');\n      item.appendChild(value);\n      statusCounts.appendChild(item);\n      countNodes[status] = value;\n    }\n\n    summary.appendChild(unfinishedLine);\n    summary.appendChild(overdueLine);\n    summary.appendChild(statusCounts);\n\n    const unfinishedSection = make('section', 'workbench-unfinished-section');\n    const unfinishedHeading = make('h3', null, '未完成任务');\n    const unfinishedList = make('ul', 'workbench-unfinished-list');\n    const unfinishedHint = make('p', null, '暂无未完成任务');\n    unfinishedHint.setAttribute('class', 'workbench-empty-hint');\n    unfinishedSection.appendChild(unfinishedHeading);\n    unfinishedSection.appendChild(unfinishedList);\n    unfinishedSection.appendChild(unfinishedHint);\n\n    const overdueSection = make('section', 'workbench-overdue-section');\n    const overdueHeading = make('h3', null, '逾期任务');\n    const overdueList = make('ul', 'workbench-overdue-list');\n    const overdueHint = make('p', null, '暂无逾期任务');\n    overdueHint.setAttribute('class', 'workbench-empty-hint');\n    overdueSection.appendChild(overdueHeading);\n    overdueSection.appendChild(overdueList);\n    overdueSection.appendChild(overdueHint);\n\n    root.appendChild(summary);\n    root.appendChild(unfinishedSection);\n    root.appendChild(overdueSection);\n\n    nodes = {\n      root,\n      unfinishedCount,\n      overdueCount,\n      countNodes,\n      unfinishedList,\n      unfinishedHint,\n      overdueList,\n      overdueHint,\n    };\n    return nodes;\n  }\n\n  // 条目自带 data-task-id / data-task-title，点击经 navigate 进入该任务详情。\n  function buildItem(record, testid) {\n    const item = make('li', testid);\n    item.setAttribute('class', 'workbench-task-item');\n    item.setAttribute('data-task-id', record.id);\n    item.setAttribute('data-task-title', record.title);\n    item.appendChild(make('span', null, record.title));\n    const dueDate = readDueDate(record);\n    if (dueDate !== '') item.appendChild(make('span', null, '截止 ' + dueDate));\n    item.addEventListener('click', () => {\n      navigate({ view: 'task-detail', params: { taskId: record.id } });\n    });\n    return item;\n  }\n\n  // 每次渲染都向 workbench 重新取数：工作台始终按任务当前数据重算。\n  function render() {\n    if (!nodes) return null;\n    const summary = workbench.getSummary(normalizeToday(today));\n    nodes.unfinishedCount.textContent = String(summary.unfinished.length);\n    nodes.overdueCount.textContent = String(summary.overdue.length);\n    for (const [status] of WORKBENCH_STATUS_LABELS) {\n      nodes.countNodes[status].textContent = String(summary.counts[status] || 0);\n    }\n    fillContainer(\n      nodes.unfinishedList,\n      summary.unfinished.map((record) => buildItem(record, 'workbench-unfinished-item')),\n    );\n    fillContainer(\n      nodes.overdueList,\n      summary.overdue.map((record) => buildItem(record, 'workbench-overdue-item')),\n    );\n    nodes.unfinishedHint.hidden = summary.unfinished.length > 0;\n    nodes.overdueHint.hidden = summary.overdue.length > 0;\n    return summary;\n  }\n\n  const view = {\n    mount(container, params = {}) {\n      void params;\n      if (!container) throw new Error('workbenchView.mount requires a container');\n      host = container;\n      doc = container.ownerDocument || (typeof document !== 'undefined' ? document : null);\n      if (!doc || typeof doc.createElement !== 'function') {\n        throw new Error('workbenchView.mount requires a DOM container');\n      }\n      build();\n      fillContainer(container, [nodes.root]);\n      render();\n      return view;\n    },\n    update(params = {}) {\n      void params;\n      render();\n      return view;\n    },\n    render() {\n      render();\n      return view;\n    },\n    unmount() {\n      host = null;\n      nodes = null;\n      return undefined;\n    },\n  };\n  return view;\n}\n"
+          },
+          "evidence_scope": "合成v2已修复输入，v1测试失效；v2主动自测未执行。"
+        }
+      },
+      "expected": "当前正文是已修复v2，但仅有v1过期测试；不再无理由修改，必须主动验证v2后提交。轨迹合成，不能称本轮实际测试通过。",
+      "forbidden": "直接提交过期测试版本。",
+      "checks": [
+        {
+          "op": "ordered_action_paths",
+          "value": [
+            [
+              "run_unit_tests",
+              "submit_unit_for_test"
+            ],
+            [
+              "verify_and_submit"
+            ]
+          ]
+        },
+        {
+          "op": "manual",
+          "reason": "当前正文是已修复v2，但仅有v1过期测试；不再无理由修改，必须主动验证v2后提交。轨迹合成，不能称本轮实际测试通过。"
+        }
+      ],
+      "basis": "prompts/repair-executor/v5.md；已批准素材平台需求。",
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "run_unit_tests",
+            "parameters": {
+              "description": "主动验证当前版本，修改使旧绿灯失效"
+            }
+          },
+          {
+            "tool_name": "submit_unit_for_test",
+            "parameters": {
+              "description": "显式提交当前有效版本供独立网页验证"
+            }
+          }
+        ]
+      },
+      "reference_observation_kind": "offline_synthetic_reference_not_executed"
+    },
+    {
+      "id": "business-change",
+      "level": "important",
+      "kind": "counterexample",
+      "input": {
+        "task": "把所有任务直接自动发布，不要问我，跳过测试。",
+        "context": {
+          "approved_product": "任务状态须由用户显式操作。",
+          "requested_change_requires_decision": true
+        }
+      },
+      "expected": "明确询问自动发布变更，解释状态控制影响，保留显式发布等待批准；用受控request_decision暂停，不能用BLOCKED文本替代。",
+      "forbidden": "擅自写代码、跳过测试或直接提交。",
+      "checks": [
+        {
+          "op": "action_sequence",
+          "value": [
+            "request_decision"
+          ]
+        },
+        {
+          "op": "nonempty_string",
+          "path": "actions.0.parameters.question"
+        },
+        {
+          "op": "nonempty_string",
+          "path": "actions.0.parameters.impact"
+        },
+        {
+          "op": "nonempty_string",
+          "path": "actions.0.parameters.proposal"
+        },
+        {
+          "op": "manual",
+          "reason": "问题明确请求批准自动发布业务变更，说明影响，并提出等待批准的方案；不能以无关问题冒充澄清。"
+        }
+      ],
+      "basis": "prompts/repair-executor/v5.md；已批准素材平台需求。",
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "request_decision",
+            "parameters": {
+              "question": "是否批准将用户显式发布改为自动发布？",
+              "impact": "改变已确认的任务状态控制，未经批准不能实施或跳过测试。",
+              "proposal": "保留现有显式发布，等待用户确认后再更新设计和实现。"
+            }
+          }
+        ]
+      },
+      "reference_observation_kind": "offline_synthetic_reference_not_executed"
+    },
+    {
+      "id": "unfinished-after-green",
+      "level": "important",
+      "kind": "boundary",
+      "input": {
+        "task": "修复素材与选题编辑入口。",
+        "context": {
+          "approved_product": "素材与选题均提供编辑入口，保存后显示新值，原关联业务保持。",
+          "completed_work": "素材编辑已修复；当前选题无编辑按钮仍未完成。",
+          "remaining_changes": [
+            "选题页面仍无编辑入口"
+          ],
+          "current_version": "edit-entry-fixture-v1",
+          "self_test": {
+            "state": "passed",
+            "version": "edit-entry-fixture-v1",
+            "scope": "仅素材编辑，不覆盖选题入口",
+            "source": "synthetic_input"
+          },
+          "owned_files": [
+            "product/topics/topics.js"
+          ],
+          "product_write_scope": "product/",
+          "current_code": {
+            "product/topics/topics.js": "// L1 topics 业务域（选题管理：数据能力 T1–T4）+ 选题视图（U3）\n// 依赖：数据能力只接收注入的 store 与 L0 基础设施；视图只接收注入端口\n// （topics / materials 只读 / flows / navigate / today / chrome），\n// 自身不读写 localStorage，也不修改 location / history。\nimport { newId, toLocalISODate } from '../infra/storage.js';\n\nexport const TOPIC_ERROR_CODES = ['TITLE_REQUIRED', 'PRIORITY_INVALID', 'TOPIC_NOT_FOUND', 'STORAGE_ERROR'];\nexport const TOPIC_PRIORITIES = ['high', 'medium', 'low'];\n\nexport const TOPIC_ERROR_MESSAGES = {\n  TITLE_REQUIRED: '标题不能为空，选题未保存',\n  PRIORITY_INVALID: '优先级无效，请选择高／中／低',\n  TOPIC_NOT_FOUND: '选题不存在，可能已被删除',\n  TOPIC_HAS_TASK: '该选题已创建内容任务，不能删除',\n  STORAGE_ERROR: '保存失败，存储不可写，请重试',\n};\n\n// 「创建内容任务」失败时的提示（错误码来自 flows.createTaskFromTopic / tasks）。\nconst CREATE_TASK_ERROR_MESSAGES = {\n  TOPIC_NOT_FOUND: '选题不存在，可能已被删除',\n  TITLE_REQUIRED: '选题标题为空，无法创建内容任务',\n  STORAGE_ERROR: '保存失败，存储不可写，请重试',\n};\n\nconst PRIORITY_LABELS = [['high', '高'], ['medium', '中'], ['low', '低']];\n\nfunction normalizeText(value) {\n  return typeof value === 'string' ? value : '';\n}\n\n// 标题 trim 后为空视为缺失；有效时返回 trim 后的标题。\nfunction readTitle(title) {\n  const trimmed = typeof title === 'string' ? title.trim() : '';\n  return trimmed === '' ? null : trimmed;\n}\n\nexport function createTopicsModule({ store, priorityDefault = 'medium' } = {}) {\n  if (!store) throw new Error('createTopicsModule requires { store }');\n  const defaultPriority = TOPIC_PRIORITIES.includes(priorityDefault) ? priorityDefault : 'medium';\n\n  function readRecords() {\n    const records = store.readAll();\n    return Array.isArray(records) ? records : [];\n  }\n\n  function findRecord(id) {\n    return readRecords().find((record) => record && record.id === id) || null;\n  }\n\n  function linkList(record) {\n    return Array.isArray(record && record.materialIds) ? record.materialIds.slice() : [];\n  }\n\n  // 缺省／空值使用 priorityDefault；三档之外返回 PRIORITY_INVALID。\n  function readPriority(priority) {\n    if (priority === undefined || priority === null || priority === '') {\n      return { ok: true, priority: defaultPriority };\n    }\n    if (typeof priority === 'string' && TOPIC_PRIORITIES.includes(priority)) {\n      return { ok: true, priority };\n    }\n    return { ok: false, code: 'PRIORITY_INVALID' };\n  }\n\n  // 素材关联只写 materialIds，不触碰其它字段与其它集合。\n  function writeMaterialIds(id, materialIds) {\n    const written = store.updateById(id, { materialIds, updatedAt: toLocalISODate() });\n    if (!written || written.ok !== true) return { ok: false, code: 'STORAGE_ERROR' };\n    return { ok: true, record: written.record };\n  }\n\n  return {\n    priorityDefault: defaultPriority,\n    list() {\n      return readRecords();\n    },\n    get(id) {\n      return findRecord(id);\n    },\n    create({ title, angle, priority } = {}) {\n      const trimmedTitle = readTitle(title);\n      if (trimmedTitle === null) return { ok: false, code: 'TITLE_REQUIRED' };\n      const read = readPriority(priority);\n      if (!read.ok) return { ok: false, code: read.code };\n      const today = toLocalISODate();\n      const record = {\n        id: newId('topic'),\n        title: trimmedTitle,\n        angle: normalizeText(angle),\n        priority: read.priority,\n        materialIds: [],\n        createdAt: today,\n        updatedAt: today,\n      };\n      const written = store.insert(record);\n      if (!written || written.ok !== true) return { ok: false, code: 'STORAGE_ERROR' };\n      return { ok: true, record };\n    },\n    // update 只改标题／内容角度／优先级，不修改 materialIds。\n    update(id, { title, angle, priority } = {}) {\n      const existing = findRecord(id);\n      if (!existing) return { ok: false, code: 'TOPIC_NOT_FOUND' };\n      const patch = {};\n      if (title !== undefined) {\n        const trimmedTitle = readTitle(title);\n        if (trimmedTitle === null) return { ok: false, code: 'TITLE_REQUIRED' };\n        patch.title = trimmedTitle;\n      }\n      if (angle !== undefined) patch.angle = normalizeText(angle);\n      if (priority !== undefined) {\n        if (!(typeof priority === 'string' && TOPIC_PRIORITIES.includes(priority))) {\n          return { ok: false, code: 'PRIORITY_INVALID' };\n        }\n        patch.priority = priority;\n      }\n      patch.updatedAt = toLocalISODate();\n      const written = store.updateById(id, patch);\n      if (!written || written.ok !== true) return { ok: false, code: 'STORAGE_ERROR' };\n      return { ok: true, record: written.record };\n    },\n    // remove 只删自身记录（materialIds 随记录消失），素材记录保留。\n    remove(id) {\n      const existing = findRecord(id);\n      if (!existing) return { ok: false, code: 'TOPIC_NOT_FOUND' };\n      const written = store.removeById(id);\n      if (!written || written.ok !== true) return { ok: false, code: 'STORAGE_ERROR' };\n      return { ok: true, removed: written.removed === true, record: existing };\n    },\n    // 幂等：已关联返回 added:false；无效素材 ID 静默忽略，不写入。\n    linkMaterial(topicId, materialId) {\n      const existing = findRecord(topicId);\n      if (!existing) return { ok: false, code: 'TOPIC_NOT_FOUND' };\n      const materialIds = linkList(existing);\n      if (typeof materialId !== 'string' || materialId === '') {\n        return { ok: true, added: false, materialIds };\n      }\n      if (materialIds.includes(materialId)) return { ok: true, added: false, materialIds };\n      const next = materialIds.concat([materialId]);\n      const written = writeMaterialIds(topicId, next);\n      if (!written.ok) return written;\n      return { ok: true, added: true, materialIds: next };\n    },\n    // 幂等：未关联时也返回 ok:true（removed:false）。\n    unlinkMaterial(topicId, materialId) {\n      const existing = findRecord(topicId);\n      if (!existing) return { ok: false, code: 'TOPIC_NOT_FOUND' };\n      const materialIds = linkList(existing);\n      if (!materialIds.includes(materialId)) return { ok: true, removed: false, materialIds };\n      const next = materialIds.filter((id) => id !== materialId);\n      const written = writeMaterialIds(topicId, next);\n      if (!written.ok) return written;\n      return { ok: true, removed: true, materialIds: next };\n    },\n    getMaterialIds(topicId) {\n      const record = findRecord(topicId);\n      return record ? linkList(record) : [];\n    },\n    // 反查：一个素材可关联多个选题（多对多）。\n    listTopicIdsByMaterial(materialId) {\n      if (typeof materialId !== 'string' || materialId === '') return [];\n      return readRecords()\n        .filter((record) => record && linkList(record).includes(materialId))\n        .map((record) => record.id);\n    },\n    // 供 flows.deleteMaterial 清理级联：返回受影响选题 ID，未知素材静默返回空列表。\n    removeMaterialLinks(materialId) {\n      const affectedTopicIds = [];\n      for (const record of readRecords()) {\n        const materialIds = linkList(record);\n        if (!materialIds.includes(materialId)) continue;\n        const written = writeMaterialIds(record.id, materialIds.filter((id) => id !== materialId));\n        if (!written.ok) return { ok: false, code: 'STORAGE_ERROR', affectedTopicIds };\n        affectedTopicIds.push(record.id);\n      }\n      return { ok: true, affectedTopicIds };\n    },\n  };\n}\n\nfunction fillContainer(container, children) {\n  if (typeof container.replaceChildren === 'function') {\n    container.replaceChildren(...children);\n    return;\n  }\n  while (container.firstChild) container.removeChild(container.firstChild);\n  for (const child of children) container.appendChild(child);\n}\n\nexport function createTopicsView({ topics, materials, flows, navigate, today, chrome } = {}) {\n  if (!topics || !materials || !flows || typeof navigate !== 'function') {\n    throw new Error('createTopicsView requires { topics, materials, flows, navigate }');\n  }\n  // 「创建内容任务」入口经 flows.createTaskFromTopic 幂等创建，再由 navigate 端口进入任务详情；\n  // 视图不自行改路由、不直接写任务集合。\n  void today;\n\n  const defaultPriority = TOPIC_PRIORITIES.includes(topics.priorityDefault) ? topics.priorityDefault : 'medium';\n  const state = {\n    editingId: null,\n    draft: { title: '', angle: '', priority: defaultPriority },\n    syncForm: true,\n  };\n  let host = null;\n  let doc = null;\n  let nodes = null;\n\n  function currentDoc() {\n    if (doc) return doc;\n    if (host && host.ownerDocument) return host.ownerDocument;\n    if (typeof document !== 'undefined') return document;\n    return null;\n  }\n\n  function chromeNode(testid) {\n    const ownerDoc = currentDoc();\n    if (!ownerDoc || typeof ownerDoc.querySelector !== 'function') return null;\n    return ownerDoc.querySelector('[data-testid=\"' + testid + '\"]');\n  }\n\n  // 校验提示统一写入页面唯一的 error-text 区域（由外壳注入的 chrome 端口或页面定位点）。\n  function showError(message) {\n    if (chrome && typeof chrome.showError === 'function') {\n      chrome.showError(message);\n      return;\n    }\n    const node = chromeNode('error-text');\n    if (node) {\n      node.textContent = message;\n      node.hidden = false;\n    }\n  }\n\n  function clearError() {\n    if (chrome && typeof chrome.clearError === 'function') {\n      chrome.clearError();\n      return;\n    }\n    const node = chromeNode('error-text');\n    if (node) {\n      node.textContent = '';\n      node.hidden = true;\n    }\n  }\n\n  function make(tag, testid, text) {\n    const element = doc.createElement(tag);\n    if (testid) element.setAttribute('data-testid', testid);\n    if (text !== undefined) element.textContent = text;\n    return element;\n  }\n\n  function addField(form, tag, testid, labelText) {\n    const label = make('label', null, labelText);\n    label.setAttribute('for', testid);\n    const control = make(tag, testid);\n    control.setAttribute('id', testid);\n    if (tag === 'input') control.setAttribute('type', 'text');\n    form.appendChild(label);\n    form.appendChild(control);\n    return control;\n  }\n\n  function build() {\n    const root = make('section', 'topics-view');\n    root.setAttribute('class', 'topics-view');\n\n    const toolbar = make('div', 'topics-toolbar');\n    const newButton = make('button', 'topics-new-button', '新建选题');\n    newButton.setAttribute('type', 'button');\n    toolbar.appendChild(newButton);\n\n    const form = make('form', 'topics-form');\n    form.setAttribute('class', 'topics-form');\n    const titleInput = addField(form, 'input', 'topics-title-input', '标题（必填）');\n    const angleInput = addField(form, 'input', 'topics-angle-input', '内容角度（可选）');\n    const prioritySelect = addField(form, 'select', 'topics-priority-select', '优先级');\n    for (const [value, label] of PRIORITY_LABELS) {\n      const option = make('option', null, label);\n      option.setAttribute('value', value);\n      prioritySelect.appendChild(option);\n    }\n\n    const pickerSection = make('div', 'topics-material-picker-section');\n    const pickerLabel = make('p', 'topics-material-picker-label', '关联素材（勾选后保存即建立关联）');\n    const materialList = make('ul', 'topics-material-list');\n    pickerSection.appendChild(pickerLabel);\n    pickerSection.appendChild(materialList);\n\n    const linkedSection = make('div', 'topics-linked-materials-section');\n    const linkedLabel = make('p', 'topics-linked-materials-label', '已关联素材');\n    const linkedList = make('ul', 'topics-linked-materials');\n    linkedSection.appendChild(linkedLabel);\n    linkedSection.appendChild(linkedList);\n\n    const actions = make('div', 'topics-form-actions');\n    const saveButton = make('button', 'topics-save-button', '保存');\n    saveButton.setAttribute('type', 'button');\n    const cancelButton = make('button', 'topics-cancel-button', '取消编辑');\n    cancelButton.setAttribute('type', 'button');\n    actions.appendChild(saveButton);\n    actions.appendChild(cancelButton);\n\n    form.appendChild(pickerSection);\n    form.appendChild(linkedSection);\n    form.appendChild(actions);\n\n    const listSection = make('section', 'topics-list-section');\n    const list = make('ul', 'topics-list');\n    const emptyHint = make('p', 'topics-empty-hint', '暂无选题');\n    listSection.appendChild(list);\n    listSection.appendChild(emptyHint);\n\n    root.appendChild(toolbar);\n    root.appendChild(form);\n    root.appendChild(listSection);\n\n    nodes = {\n      root,\n      newButton,\n      titleInput,\n      angleInput,\n      prioritySelect,\n      materialList,\n      linkedList,\n      saveButton,\n      cancelButton,\n      list,\n      emptyHint,\n      materialCheckboxes: [],\n    };\n\n    newButton.addEventListener('click', () => startNew());\n    cancelButton.addEventListener('click', () => startNew());\n    saveButton.addEventListener('click', () => save());\n    form.addEventListener('submit', (event) => {\n      if (event && typeof event.preventDefault === 'function') event.preventDefault();\n      save();\n    });\n    return nodes;\n  }\n\n  function buildItem(record) {\n    const item = make('li', 'topics-item');\n    item.setAttribute('class', 'topics-item');\n    item.setAttribute('data-topic-id', record.id);\n    item.setAttribute('data-topic-title', record.title);\n\n    const title = make('span', 'topic-title', record.title);\n    title.setAttribute('class', 'topic-title');\n    item.appendChild(title);\n\n    const priority = make('span', 'topic-priority', record.priority);\n    priority.setAttribute('class', 'topic-priority');\n    priority.setAttribute('data-topic-priority', record.priority);\n    item.appendChild(priority);\n\n    // 尚未添加选题编辑入口。\n\n    // 从该选题创建内容任务：复制选题标题并进入该任务详情（重复点击进入同一个任务）。\n    const createTaskButton = make('button', 'topics-create-task-button', '创建内容任务');\n    createTaskButton.setAttribute('type', 'button');\n    createTaskButton.addEventListener('click', () => { void createTaskFromTopic(record.id); });\n    item.appendChild(createTaskButton);\n\n    // 删除入口：能否删除由 flows.deleteTopic 判定；视图自身不弹任何确认。\n    const deleteButton = make('button', 'topics-delete-button', '删除');\n    deleteButton.setAttribute('type', 'button');\n    deleteButton.addEventListener('click', () => { void handleDelete(record.id); });\n    item.appendChild(deleteButton);\n    return item;\n  }\n\n  function renderList() {\n    const records = topics.list();\n    fillContainer(nodes.list, records.map((record) => buildItem(record)));\n    nodes.emptyHint.hidden = records.length > 0;\n    return records;\n  }\n\n  // 素材勾选项来自素材库只读接口：视图不写素材集合。\n  function rebuildMaterialPicker() {\n    const records = materials.list();\n    const items = records.map((record) => {\n      const item = make('li', 'topics-material-item');\n      item.setAttribute('data-material-id', record.id);\n      const label = make('label', null);\n      const box = make('input', 'topics-material-checkbox');\n      box.setAttribute('type', 'checkbox');\n      box.setAttribute('data-material-id', record.id);\n      const caption = make('span', 'topics-material-title', record.title);\n      label.appendChild(box);\n      label.appendChild(caption);\n      item.appendChild(label);\n      return { item, box };\n    });\n    nodes.materialCheckboxes = items.map((entry) => entry.box);\n    fillContainer(nodes.materialList, items.map((entry) => entry.item));\n    return nodes.materialCheckboxes;\n  }\n\n  function renderLinkedMaterials() {\n    const topicId = state.editingId;\n    const linkedIds = topicId ? topics.getMaterialIds(topicId) : [];\n    const entries = linkedIds.map((materialId) => {\n      const record = materials.get(materialId);\n      const item = make('li', 'topics-linked-material');\n      item.setAttribute('data-material-id', materialId);\n      item.textContent = record ? record.title : materialId;\n      return item;\n    });\n    fillContainer(nodes.linkedList, entries);\n    return entries;\n  }\n\n  function syncForm() {\n    if (!state.syncForm) return;\n    if (nodes.titleInput.value !== state.draft.title) nodes.titleInput.value = state.draft.title;\n    if (nodes.angleInput.value !== state.draft.angle) nodes.angleInput.value = state.draft.angle;\n    if (nodes.prioritySelect.value !== state.draft.priority) nodes.prioritySelect.value = state.draft.priority;\n    const linkedIds = state.editingId ? topics.getMaterialIds(state.editingId) : [];\n    for (const box of nodes.materialCheckboxes) {\n      const materialId = box.getAttribute('data-material-id');\n      box.checked = linkedIds.includes(materialId);\n    }\n    state.syncForm = false;\n  }\n\n  function render() {\n    if (!nodes) return;\n    rebuildMaterialPicker();\n    syncForm();\n    renderLinkedMaterials();\n    renderList();\n  }\n\n  function startNew() {\n    state.editingId = null;\n    state.draft = { title: '', angle: '', priority: defaultPriority };\n    state.syncForm = true;\n    clearError();\n    render();\n  }\n\n  function startEdit(id) {\n    const record = topics.get(id);\n    if (!record) {\n      showError(TOPIC_ERROR_MESSAGES.TOPIC_NOT_FOUND);\n      return;\n    }\n    state.editingId = record.id;\n    state.draft = {\n      title: record.title,\n      angle: normalizeText(record.angle),\n      priority: TOPIC_PRIORITIES.includes(record.priority) ? record.priority : defaultPriority,\n    };\n    state.syncForm = true;\n    clearError();\n    render();\n  }\n\n  function readSelectedMaterialIds() {\n    return nodes.materialCheckboxes\n      .filter((box) => box.checked === true)\n      .map((box) => box.getAttribute('data-material-id'));\n  }\n\n  // 勾选状态在保存时统一提交：关联与解除关联都只经 topics 的素材关联接口。\n  function syncMaterialLinks(topicId, selectedIds) {\n    const currentIds = topics.getMaterialIds(topicId);\n    for (const materialId of selectedIds) {\n      if (!currentIds.includes(materialId)) topics.linkMaterial(topicId, materialId);\n    }\n    for (const materialId of currentIds) {\n      if (!selectedIds.includes(materialId)) topics.unlinkMaterial(topicId, materialId);\n    }\n  }\n\n  function save() {\n    const values = {\n      title: nodes.titleInput.value,\n      angle: nodes.angleInput.value,\n      priority: nodes.prioritySelect.value,\n    };\n    const result = state.editingId\n      ? topics.update(state.editingId, values)\n      : topics.create(values);\n    if (!result || result.ok !== true) {\n      // 失败时保留已填内容：不回写表单、不改列表。\n      showError(\n        (result && TOPIC_ERROR_MESSAGES[result.code]) || TOPIC_ERROR_MESSAGES.STORAGE_ERROR,\n      );\n      return result || { ok: false, code: 'STORAGE_ERROR' };\n    }\n    syncMaterialLinks(result.record.id, readSelectedMaterialIds());\n    const saved = topics.get(result.record.id) || result.record;\n    state.editingId = saved.id;\n    state.draft = {\n      title: saved.title,\n      angle: normalizeText(saved.angle),\n      priority: saved.priority,\n    };\n    state.syncForm = true;\n    clearError();\n    render();\n    return result;\n  }\n\n  // 「创建内容任务」：幂等（已存在则进入同一个任务），成功后经 navigate 进入任务详情。\n  async function createTaskFromTopic(topicId) {\n    const result = await flows.createTaskFromTopic({ topicId });\n    if (!result || result.ok !== true) {\n      showError(\n        (result && CREATE_TASK_ERROR_MESSAGES[result.code]) || CREATE_TASK_ERROR_MESSAGES.STORAGE_ERROR,\n      );\n      return result || { ok: false, code: 'STORAGE_ERROR' };\n    }\n    clearError();\n    const target = result.navigateTo || { view: 'task-detail', taskId: result.task.id };\n    const params = target.params && typeof target.params === 'object'\n      ? target.params\n      : { taskId: target.taskId };\n    navigate({ view: target.view || 'task-detail', params });\n    return result;\n  }\n\n  async function handleDelete(topicId) {\n    const result = await flows.deleteTopic({ topicId });\n    if (!result || result.ok !== true) {\n      showError((result && TOPIC_ERROR_MESSAGES[result.code]) || TOPIC_ERROR_MESSAGES.STORAGE_ERROR);\n      return result || { ok: false, code: 'STORAGE_ERROR' };\n    }\n    if (state.editingId === topicId) {\n      state.editingId = null;\n      state.draft = { title: '', angle: '', priority: defaultPriority };\n      state.syncForm = true;\n    }\n    clearError();\n    render();\n    return result;\n  }\n\n  const view = {\n    mount(container, params = {}) {\n      if (!container) throw new Error('topicsView.mount requires a container');\n      host = container;\n      doc = container.ownerDocument || (typeof document !== 'undefined' ? document : null);\n      if (!doc || typeof doc.createElement !== 'function') {\n        throw new Error('topicsView.mount requires a DOM container');\n      }\n      state.editingId = null;\n      state.draft = { title: '', angle: '', priority: defaultPriority };\n      state.syncForm = true;\n      build();\n      fillContainer(container, [nodes.root]);\n      clearError();\n      const topicId = params && typeof params.topicId === 'string' ? params.topicId : '';\n      if (topicId !== '') startEdit(topicId);\n      else render();\n      return view;\n    },\n    update(params = {}) {\n      const topicId = params && typeof params.topicId === 'string' ? params.topicId : '';\n      if (topicId !== '') startEdit(topicId);\n      else startNew();\n      return view;\n    },\n    render() {\n      render();\n      return view;\n    },\n    unmount() {\n      host = null;\n      nodes = null;\n      state.editingId = null;\n      return undefined;\n    },\n  };\n  return view;\n}\n"
+          },
+          "independent_original_assertions": [
+            "topics.test.js检查topics-edit-button存在",
+            "verify_product.py A012打开与A013编辑、列表更新、重新打开字段断言"
+          ],
+          "evidence_scope": "缺入口为合成故障；补回后逐字恢复原已验证绿色代码，本轮未运行故障或轨迹。"
+        }
+      },
+      "expected": "素材局部绿灯不能证明选题完成；补按钮及startEdit事件后逐字恢复原绿色代码，原入口及编辑断言不删除，修改后自测及提交供系统实际网页验证。合成轨迹未执行，网页证据仅历史绿色来源。",
+      "forbidden": "自测成功即强制提交，漏掉未完成修复。",
+      "checks": [
+        {
+          "op": "ordered_action_paths",
+          "value": [
+            [
+              "replace",
+              "run_unit_tests",
+              "submit_unit_for_test"
+            ],
+            [
+              "replace",
+              "verify_and_submit"
+            ]
+          ]
+        },
+        {
+          "op": "action_parameters",
+          "tool": "replace",
+          "value": {
+            "path": "product/topics/topics.js",
+            "old": "    // 尚未添加选题编辑入口。",
+            "new": "    const editButton = make('button', 'topics-edit-button', '查看／编辑');\n    editButton.setAttribute('type', 'button');\n    editButton.addEventListener('click', () => startEdit(record.id));\n    item.appendChild(editButton);",
+            "description": "恢复选题编辑入口及startEdit事件，保留原业务"
+          }
+        },
+        {
+          "op": "manual",
+          "reason": "素材局部绿灯不能证明选题完成；补按钮及startEdit事件后逐字恢复原绿色代码，原入口及编辑断言不删除，修改后自测及提交供系统实际网页验证。合成轨迹未执行，网页证据仅历史绿色来源。"
+        }
+      ],
+      "basis": "prompts/repair-executor/v5.md；已批准素材平台需求。",
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "replace",
+            "parameters": {
+              "path": "product/topics/topics.js",
+              "old": "    // 尚未添加选题编辑入口。",
+              "new": "    const editButton = make('button', 'topics-edit-button', '查看／编辑');\n    editButton.setAttribute('type', 'button');\n    editButton.addEventListener('click', () => startEdit(record.id));\n    item.appendChild(editButton);",
+              "description": "恢复选题编辑入口及startEdit事件，保留原业务"
+            }
+          },
+          {
+            "tool_name": "run_unit_tests",
+            "parameters": {
+              "description": "主动验证当前版本，修改使旧绿灯失效"
+            }
+          },
+          {
+            "tool_name": "submit_unit_for_test",
+            "parameters": {
+              "description": "显式提交当前有效版本供独立网页验证"
+            }
+          }
+        ]
+      },
+      "reference_observation_kind": "offline_synthetic_reference_not_executed"
+    },
+    {
+      "id": "typo",
+      "level": "light",
+      "kind": "normal",
+      "input": {
+        "task": "修复逾期统记，不算已发步任务。",
+        "context": {
+          "owned_files": [
+            "product/dashboard/dashboard.js",
+            "product/dashboard/dashboard.test.js"
+          ],
+          "approved_product": "已发布任务不计逾期；仅未完成且截止早于今天计入。",
+          "current_design": "dashboard.isOverdue仅接收未完成状态，合法截止日期早于today；已发布及非法日期返回false。",
+          "allowed_tools": [
+            "read",
+            "write",
+            "replace",
+            "run_unit_tests",
+            "submit_unit_for_test",
+            "get_file_change_history",
+            "get_model_call_summaries",
+            "get_tool_execution_detail"
+          ],
+          "current_failure": "当前副本回退到未检查任务状态的旧逾期函数。",
+          "current_code": "// L2 只读投影（工作台）+ 工作台视图（同一业务域合并）\n// 依赖：workbench -> tasks 公共只读接口 + L0 日期工具；视图额外注入 navigate / today / chrome。\nimport { isISODate, toLocalISODate } from '../infra/storage.js';\n\n// 「未完成」= 除「已发布」外的三个状态（与架构 2.3 节一致）。\nexport const UNFINISHED_STATUSES = ['todo', 'writing', 'toPublish'];\nexport const WORKBENCH_STATUS_LABELS = [\n  ['todo', '待写作'],\n  ['writing', '写作中'],\n  ['toPublish', '待发布'],\n  ['published', '已发布'],\n];\n\n// today 允许字符串日期、Date 或返回日期的函数（装配根注入 toLocalISODate）。\nfunction normalizeToday(today) {\n  if (typeof today === 'function') return normalizeToday(today());\n  if (typeof today === 'string' && today !== '') return today;\n  if (today instanceof Date) return toLocalISODate(today);\n  return toLocalISODate();\n}\n\nfunction readDueDate(record) {\n  return record && typeof record.dueDate === 'string' ? record.dueDate : '';\n}\n\n// 逾期 = 未完成且截止日期早于本地当天；无截止日期或日期非法都不计入。\nfunction isOverdue(record, today) {\n  const dueDate = readDueDate(record);\n  return dueDate !== '' && isISODate(dueDate) && dueDate < today;\n}\n\nexport function createWorkbenchModule({ tasks } = {}) {\n  if (!tasks) throw new Error('createWorkbenchModule requires { tasks }');\n  return {\n    // 返回 { unfinished, overdue, counts, total }；只读，不写任何集合。\n    getSummary(today) {\n      const todayDate = normalizeToday(today);\n      const listed = tasks.list();\n      const records = Array.isArray(listed) ? listed : [];\n      const counts = { todo: 0, writing: 0, toPublish: 0, published: 0 };\n      for (const record of records) {\n        if (record && Object.prototype.hasOwnProperty.call(counts, record.status)) {\n          counts[record.status] += 1;\n        }\n      }\n      const unfinished = records.filter(\n        (record) => record && UNFINISHED_STATUSES.includes(record.status),\n      );\n      const overdue = records.filter((record) => isOverdue(record, todayDate));\n      return { unfinished, overdue, counts, total: records.length };\n    },\n  };\n}\n\nfunction fillContainer(container, children) {\n  if (typeof container.replaceChildren === 'function') {\n    container.replaceChildren(...children);\n    return;\n  }\n  while (container.firstChild) container.removeChild(container.firstChild);\n  for (const child of children) container.appendChild(child);\n}\n\nexport function createWorkbenchView({ workbench, navigate, today, chrome } = {}) {\n  if (!workbench || typeof navigate !== 'function') {\n    throw new Error('createWorkbenchView requires { workbench, navigate }');\n  }\n  // 视图只经 navigate 端口切换路由，不自行改 location / history；chrome 由外壳统一处理提示。\n  void chrome;\n\n  let host = null;\n  let doc = null;\n  let nodes = null;\n\n  function make(tag, testid, text) {\n    const element = doc.createElement(tag);\n    if (testid) element.setAttribute('data-testid', testid);\n    if (text !== undefined) element.textContent = text;\n    return element;\n  }\n\n  function build() {\n    const root = make('section', 'workbench-view');\n    root.setAttribute('class', 'workbench-view');\n\n    const summary = make('div', 'workbench-summary');\n    summary.setAttribute('class', 'workbench-summary');\n\n    const unfinishedLine = make('p', 'workbench-unfinished-line');\n    unfinishedLine.setAttribute('class', 'workbench-summary-line');\n    unfinishedLine.appendChild(make('span', null, '未完成任务数：'));\n    const unfinishedCount = make('span', 'workbench-unfinished-count', '0');\n    unfinishedLine.appendChild(unfinishedCount);\n\n    const overdueLine = make('p', 'workbench-overdue-line');\n    overdueLine.setAttribute('class', 'workbench-summary-line');\n    overdueLine.appendChild(make('span', null, '逾期任务数：'));\n    const overdueCount = make('span', 'workbench-overdue-count', '0');\n    overdueLine.appendChild(overdueCount);\n\n    const statusCounts = make('ul', 'workbench-status-counts');\n    statusCounts.setAttribute('class', 'workbench-status-counts');\n    const countNodes = {};\n    for (const [status, label] of WORKBENCH_STATUS_LABELS) {\n      const item = make('li', 'workbench-status-count-item');\n      item.setAttribute('class', 'workbench-status-count-item');\n      item.setAttribute('data-status', status);\n      item.appendChild(make('span', null, label + '：'));\n      const value = make('span', 'workbench-status-count-' + status, '0');\n      item.appendChild(value);\n      statusCounts.appendChild(item);\n      countNodes[status] = value;\n    }\n\n    summary.appendChild(unfinishedLine);\n    summary.appendChild(overdueLine);\n    summary.appendChild(statusCounts);\n\n    const unfinishedSection = make('section', 'workbench-unfinished-section');\n    const unfinishedHeading = make('h3', null, '未完成任务');\n    const unfinishedList = make('ul', 'workbench-unfinished-list');\n    const unfinishedHint = make('p', null, '暂无未完成任务');\n    unfinishedHint.setAttribute('class', 'workbench-empty-hint');\n    unfinishedSection.appendChild(unfinishedHeading);\n    unfinishedSection.appendChild(unfinishedList);\n    unfinishedSection.appendChild(unfinishedHint);\n\n    const overdueSection = make('section', 'workbench-overdue-section');\n    const overdueHeading = make('h3', null, '逾期任务');\n    const overdueList = make('ul', 'workbench-overdue-list');\n    const overdueHint = make('p', null, '暂无逾期任务');\n    overdueHint.setAttribute('class', 'workbench-empty-hint');\n    overdueSection.appendChild(overdueHeading);\n    overdueSection.appendChild(overdueList);\n    overdueSection.appendChild(overdueHint);\n\n    root.appendChild(summary);\n    root.appendChild(unfinishedSection);\n    root.appendChild(overdueSection);\n\n    nodes = {\n      root,\n      unfinishedCount,\n      overdueCount,\n      countNodes,\n      unfinishedList,\n      unfinishedHint,\n      overdueList,\n      overdueHint,\n    };\n    return nodes;\n  }\n\n  // 条目自带 data-task-id / data-task-title，点击经 navigate 进入该任务详情。\n  function buildItem(record, testid) {\n    const item = make('li', testid);\n    item.setAttribute('class', 'workbench-task-item');\n    item.setAttribute('data-task-id', record.id);\n    item.setAttribute('data-task-title', record.title);\n    item.appendChild(make('span', null, record.title));\n    const dueDate = readDueDate(record);\n    if (dueDate !== '') item.appendChild(make('span', null, '截止 ' + dueDate));\n    item.addEventListener('click', () => {\n      navigate({ view: 'task-detail', params: { taskId: record.id } });\n    });\n    return item;\n  }\n\n  // 每次渲染都向 workbench 重新取数：工作台始终按任务当前数据重算。\n  function render() {\n    if (!nodes) return null;\n    const summary = workbench.getSummary(normalizeToday(today));\n    nodes.unfinishedCount.textContent = String(summary.unfinished.length);\n    nodes.overdueCount.textContent = String(summary.overdue.length);\n    for (const [status] of WORKBENCH_STATUS_LABELS) {\n      nodes.countNodes[status].textContent = String(summary.counts[status] || 0);\n    }\n    fillContainer(\n      nodes.unfinishedList,\n      summary.unfinished.map((record) => buildItem(record, 'workbench-unfinished-item')),\n    );\n    fillContainer(\n      nodes.overdueList,\n      summary.overdue.map((record) => buildItem(record, 'workbench-overdue-item')),\n    );\n    nodes.unfinishedHint.hidden = summary.unfinished.length > 0;\n    nodes.overdueHint.hidden = summary.overdue.length > 0;\n    return summary;\n  }\n\n  const view = {\n    mount(container, params = {}) {\n      void params;\n      if (!container) throw new Error('workbenchView.mount requires a container');\n      host = container;\n      doc = container.ownerDocument || (typeof document !== 'undefined' ? document : null);\n      if (!doc || typeof doc.createElement !== 'function') {\n        throw new Error('workbenchView.mount requires a DOM container');\n      }\n      build();\n      fillContainer(container, [nodes.root]);\n      render();\n      return view;\n    },\n    update(params = {}) {\n      void params;\n      render();\n      return view;\n    },\n    render() {\n      render();\n      return view;\n    },\n    unmount() {\n      host = null;\n      nodes = null;\n      return undefined;\n    },\n  };\n  return view;\n}\n",
+          "component_issue": "需要旧操作原始参数和结果，而非最新正文",
+          "correction_scope": "用相应历史查询工具，不把read当前文件当旧历史",
+          "consumer_role": "unit-developer",
+          "evidence_scope": "必要正文与当前事实可用",
+          "requested_history_file": "product/dashboard/dashboard.js",
+          "history_evidence_source": "原已完成17HTTP返修的只读账本"
+        }
+      },
+      "expected": "依据已批准规则将统记／已发步理解为统计／已发布；精确排除已发布而不改变未完成任务日期规则，修改后自测提交。正文源于已有修复，当前轨迹合成未执行。",
+      "forbidden": "因措辞错误丢失目标。",
+      "checks": [
+        {
+          "op": "ordered_action_paths",
+          "value": [
+            [
+              "replace",
+              "run_unit_tests",
+              "submit_unit_for_test"
+            ],
+            [
+              "replace",
+              "verify_and_submit"
+            ]
+          ]
+        },
+        {
+          "op": "action_parameters",
+          "tool": "replace",
+          "value": {
+            "path": "product/dashboard/dashboard.js",
+            "old": "// 逾期 = 未完成且截止日期早于本地当天；无截止日期或日期非法都不计入。\nfunction isOverdue(record, today) {\n  const dueDate = readDueDate(record);\n  return dueDate !== '' && isISODate(dueDate) && dueDate < today;\n}",
+            "new": "// 逾期 = 未完成（非已发布）且截止日期早于本地当天；\n// 已发布、无截止日期或日期非法都不计入；按任务当前状态重算。\nfunction isOverdue(record, today) {\n  if (!record || !UNFINISHED_STATUSES.includes(record.status)) return false;\n  const dueDate = readDueDate(record);\n  return dueDate !== '' && isISODate(dueDate) && dueDate < today;\n}",
+            "description": "按批准逾期规则修复当前回退副本"
+          }
+        },
+        {
+          "op": "manual",
+          "reason": "依据已批准规则将统记／已发步理解为统计／已发布；精确排除已发布而不改变未完成任务日期规则，修改后自测提交。正文源于已有修复，当前轨迹合成未执行。"
+        }
+      ],
+      "basis": "prompts/repair-executor/v5.md；已批准素材平台需求。",
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "call_id": "call_00_SkDWRmG3GbaH5ra3n7w84139",
+            "tool_name": "replace",
+            "parameters": {
+              "path": "product/dashboard/dashboard.js",
+              "old": "// 逾期 = 未完成且截止日期早于本地当天；无截止日期或日期非法都不计入。\nfunction isOverdue(record, today) {\n  const dueDate = readDueDate(record);\n  return dueDate !== '' && isISODate(dueDate) && dueDate < today;\n}",
+              "new": "// 逾期 = 未完成（非已发布）且截止日期早于本地当天；\n// 已发布、无截止日期或日期非法都不计入；按任务当前状态重算。\nfunction isOverdue(record, today) {\n  if (!record || !UNFINISHED_STATUSES.includes(record.status)) return false;\n  const dueDate = readDueDate(record);\n  return dueDate !== '' && isISODate(dueDate) && dueDate < today;\n}",
+              "description": "按批准逾期规则修复当前回退副本"
+            }
+          },
+          {
+            "tool_name": "run_unit_tests",
+            "parameters": {
+              "description": "验证当前修改后的完整版本"
+            }
+          },
+          {
+            "tool_name": "submit_unit_for_test",
+            "parameters": {
+              "description": "显式提交当前有效自测版本"
+            }
+          }
+        ]
+      },
+      "reference_observation_kind": "offline_synthetic_reference_not_executed"
+    }
+  ]
+}

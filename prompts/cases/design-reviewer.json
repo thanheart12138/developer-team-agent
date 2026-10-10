@@ -1,0 +1,163 @@
+{
+  "contract": {
+    "purpose": "你是独立设计评审，只返回简短完整 JSON：action（ready|revise|clarify）、issues（字符串数组）、question。核对正式需求、当前单元验收和共享交互契约，检查模块依赖、数据所有权、接口输入输出、状态、关键流程、失败策略和测试是否足以实施。仅当前必需项阻塞，不按生产系统要求扩大范围。revise 最多列三项当前阻塞且 question 为空；权威顺序为已批准需求、开发计划中的当前单元验收与文件所有权、共享契约、依赖设计；后两者越界增加当前单元接口时应要求当前单元修正并声明唯一出口，不得要求用户裁决。需要用户补关键决定时 clarify，issues 简述依据并只提出一个 question；全部明确才 ready。不得输出 JSON 之外的文字。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/design-reviewer/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "level": "normal",
+      "kind": "normal",
+      "input": {
+        "task": "评审当前素材新增单元。",
+        "context": {
+          "approved_product": "新增标题必填，保存本地并刷新保留。",
+          "unit": "仅新增与存储；不做登录。",
+          "design": "materials.create({title,note})校验title.trim非空；返回record；storage.saveMaterials持久化，失败返回error且不改变列表；测试空标题、保存和刷新。"
+        }
+      },
+      "expected": "action=ready，不为当前最小单元要求登录或生产监控。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "issues",
+            "question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "ready"
+        },
+        {
+          "op": "equals",
+          "path": "output.issues",
+          "value": []
+        },
+        {
+          "op": "equals",
+          "path": "output.question",
+          "value": ""
+        },
+        {
+          "op": "manual",
+          "reason": "职责、接口、失败与测试足以实现当前单元。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"ready\", \"issues\": [], \"question\": \"\"}",
+        "actions": []
+      },
+      "basis": "prompts/design-reviewer/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "boundary",
+      "level": "important",
+      "kind": "boundary",
+      "input": {
+        "task": "评审明确缺接口的设计。",
+        "context": {
+          "approved_product": "素材新增、保存后刷新保留。",
+          "unit": "新增与持久化。",
+          "design": "页面调用save()，未说明参数、数据归属与失败处理。"
+        }
+      },
+      "expected": "action=revise，最多三项当前实现阻塞，question为空。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "issues",
+            "question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "revise"
+        },
+        {
+          "op": "equals",
+          "path": "output.question",
+          "value": ""
+        },
+        {
+          "op": "manual",
+          "reason": "只指出当前必要实现缺口，不把内部接口缺口推给用户。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"revise\", \"issues\": [\"明确save输入、数据归属及失败后状态。\"], \"question\": \"\"}",
+        "actions": []
+      },
+      "basis": "prompts/design-reviewer/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "counterexample",
+      "level": "important",
+      "kind": "counterexample",
+      "input": {
+        "task": "依赖设计越界要求当前模块增加第二套写入口。",
+        "context": {
+          "approved_product": "素材只能由materials模块写入。",
+          "unit": "materials.create是当前单元唯一写出口。",
+          "shared_contract": "UI还要求直接调用storage.rawInsert写素材。",
+          "design": "materials.create负责校验及持久化。"
+        }
+      },
+      "expected": "action=revise，声明唯一出口；不用clarify让用户裁决内部越界。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "issues",
+            "question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "revise"
+        },
+        {
+          "op": "equals",
+          "path": "output.question",
+          "value": ""
+        },
+        {
+          "op": "manual",
+          "reason": "遵守批准需求和当前单元权威顺序。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"revise\", \"issues\": [\"共享约定越界，应以materials.create为唯一写出口。\"], \"question\": \"\"}",
+        "actions": []
+      },
+      "basis": "prompts/design-reviewer/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    }
+  ]
+}

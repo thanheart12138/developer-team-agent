@@ -1,4 +1,20 @@
 :root { font-family: Inter, "Microsoft YaHei", sans-serif; color: #202123; background: #f7f7f8; }
+.management-link { width: min(1560px, calc(100% - 32px)); margin: 16px auto; }
+.prompt-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 24px; }
+.prompt-list { display: grid; gap: 8px; max-height: 78vh; overflow: auto; margin-top: 12px; }
+.prompt-list button { text-align: left; margin-left: 0; }
+.prompt-list small { display: block; color: inherit; font-weight: normal; margin-top: 6px; }
+.prompt-code { min-height: 240px; font-family: monospace; }
+.prompt-manager table { border-collapse: collapse; width: 100%; }
+.prompt-manager td, .prompt-manager th { text-align: left; vertical-align: top; border-bottom: 1px solid #e1e3e8; padding: 12px 8px; }
+.prompt-manager select { padding: 10px; border-radius: 8px; border: 1px solid #cfd3da; }
+.prompt-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.prompt-diff pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #f7f7f8; }
+.changed-line { background: #fff0b3; }
+.prompt-result { padding: 12px; border: 1px solid #dde0e5; border-radius: 8px; }
+.prompt-confirm { display: flex; align-items: center; }
+.prompt-confirm input { width: auto; }
+@media (max-width: 800px) { .prompt-layout, .prompt-diff { grid-template-columns: 1fr; } .prompt-list { max-height: 240px; } }
 * { box-sizing: border-box; }
 body { margin: 0; }
 button, input, textarea { font: inherit; }

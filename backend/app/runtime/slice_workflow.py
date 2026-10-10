@@ -356,30 +356,23 @@ def plan_next_slice(db, task, run, tools, plan: dict, progress: dict,
                 return {"action": action, "coverage_summary": decision["coverage_summary"]}
             raise ValueError("slice_action_invalid")
         except (ValueError, TypeError, KeyError) as exc:
-            instruction = "只修正结构错误，返回完整 JSON；这是内部工程校验，不得向用户 clarify。"
+            instruction = load_prompt('slice-workflow-feedback-1').text
             if str(exc) == "slice_design_repair_not_delivered":
-                instruction += " 当前验收设计缺陷尚未交付，必须依据 current_acceptance_feedback 和 pending_repair_objectives 生成返修业务卡，包含需要修改的实现与验证文件。"
+                instruction += load_prompt('slice-workflow-feedback-2').text
             if str(exc) == "slice_coverage_summary_invalid":
-                instruction += (" coverage_summary 必须是非空数组；每项写非空文字，或写"
-                                " {requirement/acceptance: 非空文字, covered_by: 非空文字或非空文字数组}。")
+                instruction += (load_prompt('slice-workflow-feedback-3').text)
             if str(exc) == "slice_non_business_id":
-                instruction += (" 不要创建独立测试、文档或浏览器验证切片；系统在切片完成后另有全局浏览器验证。"
-                                "若固定入口文件尚缺，把它们并入完成可运行产品的 app-delivery 业务切片。")
+                instruction += (load_prompt('slice-workflow-feedback-4').text)
             if str(exc).startswith("slice_complete_missing_product_entries:"):
-                instruction += (" 当前仍缺少固定交付入口，不能宣布 complete。"
-                                "请创建一张 app-delivery 业务切片补齐 missing_product_entries，"
-                                "并以可运行产品交付为业务目标。")
+                instruction += (load_prompt('slice-workflow-feedback-5').text)
             if str(exc) in {"slice_card_ignores_scaffold_todos", "slice_complete_scaffold_todos_remaining"}:
-                instruction += (" 必须优先选择 remaining_todo_files 对应的业务模块，并在该业务切片中把 todo"
-                                " 改成真实断言；仍有 todo 时不得 complete。")
+                instruction += (load_prompt('slice-workflow-feedback-6').text)
             if str(exc).startswith("slice_required_interfaces_unavailable:"):
-                instruction += (" 当前卡依赖尚未交付的公共接口。必须把这些接口所属模块的全部骨架实现文件和测试文件"
-                                "加入当前卡，并把所属模块加入 owners；不得把缺口留给 Developer。")
+                instruction += (load_prompt('slice-workflow-feedback-7').text)
             if str(exc).startswith(("slice_required_interface_unknown:", "slice_required_interface_ambiguous:",
                                     "slice_acceptance_interface_",
                                     "slice_required_interfaces_mismatch")):
-                instruction += (" 按 scaffold_contract 公共接口逐条修正 required_interfaces 和 acceptance_interfaces；"
-                                "每条 acceptance 必须映射其真实需要的全部公共接口。")
+                instruction += (load_prompt('slice-workflow-feedback-8').text)
             feedback = {"error": str(exc), "instruction": instruction}
     raise RuntimeError("slice_plan_validation_failed")
 
@@ -625,7 +618,7 @@ def _repair_diagnostic(db, task, run, scoped: SliceTools) -> dict:
         "failure_report": "\n".join(filter(None, [result.get("error"), output.get("stderr", "")[:1000], excerpt])),
         "exit_code": output.get("exit_code"), "timed_out": output.get("timed_out", False),
         "detail_path": relative_path,
-        "instruction": "程序诊断仅提供当前真实错误，不算开发自测。按错误位置读取必要范围并修复，同时完成原始验收目标；仍须主动 run_unit_tests，通过后显式提交。"}
+        "instruction": load_prompt('slice-workflow-feedback-9').text}
 
 
 def _repair_history_key(run, card_id: str, failure_key: str) -> str:
@@ -707,7 +700,7 @@ def handle_repair(db, task, run, tools: ToolRuntime) -> None:
                                "failure_report": failure,
                                "detail_path": failure_reference,
                                "report_sha256": hashlib.sha256((root / failure_reference).read_bytes()).hexdigest(),
-                               "instruction": "保留并完成原始验收目标；最新失败是当前阻塞，不能替代原始目标。先读取必要文件，补对应操作与断言，修改后测试并提交。"},
+                               "instruction": load_prompt('slice-workflow-feedback-10').text},
         "passed_slices": [{"id": entry["card"]["id"]} for entry in completed],
     }, scoped, tool_schemas=[schema for schema in TOOL_SCHEMAS
                              if schema["function"]["name"] in {"read", "write", "replace"}]

@@ -1,0 +1,169 @@
+{
+  "contract": {
+    "purpose": "你是切片完成前的独立覆盖审查者。输入包含内部行为验收标准、已通过切片的验收条件和真实测试结果，以及当前浏览器验证脚本。只返回 JSON 对象 {\"complete\":true或false,\"issues\":[{\"acceptance_id\":\"标准条目 ID\",\"problem\":\"具体未覆盖的用户行为或缺失的验证\"}]}，不得写文件或调用工具。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/acceptance-coverage-reviewer/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "kind": "normal",
+      "level": "normal",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "standards": [
+            {
+              "id": "A1",
+              "action": "页面编辑标题并保存"
+            }
+          ],
+          "passed_slice": "已通过：列表编辑入口、保存后标题更新。",
+          "browser_script": "page.get_by_test_id('edit').click(); page.get_by_test_id('title').fill('新标题'); page.get_by_test_id('save').click(); assert page.get_by_test_id('title-label').inner_text() == '新标题'"
+        }
+      },
+      "expected": "操作与结果断言对应A1，complete=true；不代替实际运行。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "complete",
+            "issues"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.complete",
+          "value": true
+        },
+        {
+          "op": "equals",
+          "path": "output.issues",
+          "value": []
+        },
+        {
+          "op": "manual",
+          "reason": "核对页面操作与断言的对应关系，不因脚本文字推断实际运行成功。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"complete\": true, \"issues\": []}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-coverage-reviewer/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "boundary",
+      "kind": "boundary",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "standards": [
+            {
+              "id": "A1",
+              "action": "页面编辑素材"
+            }
+          ],
+          "passed_slice": "storage.update Node测试通过",
+          "browser_script": "assert page.title() == \"素材\""
+        }
+      },
+      "expected": "仓储测试与标题不能证明编辑入口，complete=false，指出A1。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "complete",
+            "issues"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.complete",
+          "value": false
+        },
+        {
+          "op": "equals",
+          "path": "output.issues.0.acceptance_id",
+          "value": "A1"
+        },
+        {
+          "op": "manual",
+          "reason": "不能以数据API测试代替用户操作。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"complete\": false, \"issues\": [{\"acceptance_id\": \"A1\", \"problem\": \"缺页面编辑操作和保存结果断言。\"}]}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-coverage-reviewer/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "counterexample",
+      "kind": "counterexample",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "standards": [
+            {
+              "id": "A1",
+              "action": "页面编辑素材"
+            }
+          ],
+          "passed_slice": "模型声称全流程完成，测试999项通过",
+          "browser_script": "# 编辑已完成\nassert page.title() == \"素材\""
+        }
+      },
+      "expected": "评论、模型自述与测试数无效，complete=false、A1未覆盖。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "complete",
+            "issues"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.complete",
+          "value": false
+        },
+        {
+          "op": "equals",
+          "path": "output.issues.0.acceptance_id",
+          "value": "A1"
+        },
+        {
+          "op": "manual",
+          "reason": "拒绝把声明当操作证据。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"complete\": false, \"issues\": [{\"acceptance_id\": \"A1\", \"problem\": \"没有实际编辑操作及对应结果断言。\"}]}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-coverage-reviewer/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    }
+  ]
+}

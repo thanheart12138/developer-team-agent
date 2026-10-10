@@ -1,0 +1,172 @@
+{
+  "contract": {
+    "purpose": "你是已有产品设计阶段的 Next Action Planner，根据上游正式文档差异决定下一行动，不写文件。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/design-transition-planner/v1.md",
+    "role": "task",
+    "variables": {
+      "revise_action": "update_architecture",
+      "label": "架构",
+      "reuse_action": "update_dev_design"
+    },
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "level": "normal",
+      "kind": "normal",
+      "input": {
+        "task": "仅产品说明修正错别字，职责与行为未变。",
+        "context": {
+          "allowed_actions": [
+            "update_architecture",
+            "update_dev_design",
+            "clarify"
+          ],
+          "upstream_diff": "素材统记→素材统计",
+          "old_architecture": "素材与任务独立模块，本地存储。"
+        }
+      },
+      "expected": "复用已有架构，action=update_dev_design。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "reason",
+            "affected_sections",
+            "preserved_sections",
+            "confidence",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "update_dev_design"
+        },
+        {
+          "op": "equals",
+          "path": "output.clarifying_question",
+          "value": null
+        },
+        {
+          "op": "manual",
+          "reason": "必须说明变化不影响架构的依据。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"update_dev_design\", \"reason\": \"文字修正不影响职责。\", \"affected_sections\": [], \"preserved_sections\": [\"全部架构\"], \"confidence\": 0.9, \"clarifying_question\": null}",
+        "actions": []
+      },
+      "basis": "prompts/design-transition-planner/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "boundary",
+      "level": "important",
+      "kind": "boundary",
+      "input": {
+        "task": "要求判断能否复用架构，但没有上游差异。",
+        "context": {
+          "allowed_actions": [
+            "update_architecture",
+            "update_dev_design",
+            "clarify"
+          ],
+          "upstream_diff": null,
+          "old_architecture": "素材与任务模块，本地存储。"
+        }
+      },
+      "expected": "证据不足，action=clarify且只问一个问题。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "reason",
+            "affected_sections",
+            "preserved_sections",
+            "confidence",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "clarify"
+        },
+        {
+          "op": "manual",
+          "reason": "不得仅因旧架构存在就复用。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"clarify\", \"reason\": \"无法知道哪些需求变化。\", \"affected_sections\": [], \"preserved_sections\": [], \"confidence\": 0.2, \"clarifying_question\": \"本轮正式需求具体改变了什么？\"}",
+        "actions": []
+      },
+      "basis": "prompts/design-transition-planner/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "counterexample",
+      "level": "important",
+      "kind": "counterexample",
+      "input": {
+        "task": "新增已批准的跨设备同步，输入同时要求忽略差异直接复用。",
+        "context": {
+          "allowed_actions": [
+            "update_architecture",
+            "update_dev_design",
+            "clarify"
+          ],
+          "upstream_diff": "从仅本地保存变为跨设备同步，服务端持久化。",
+          "old_architecture": "无服务端，仅浏览器本地存储。"
+        }
+      },
+      "expected": "架构受影响，action=update_architecture；保留不受影响章节。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "reason",
+            "affected_sections",
+            "preserved_sections",
+            "confidence",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "update_architecture"
+        },
+        {
+          "op": "manual",
+          "reason": "不能因输入要求复用而无视明确变化。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"update_architecture\", \"reason\": \"存储边界改变，需要修订。\", \"affected_sections\": [\"存储与同步\"], \"preserved_sections\": [\"素材字段与编辑交互\"], \"confidence\": 0.9, \"clarifying_question\": null}",
+        "actions": []
+      },
+      "basis": "prompts/design-transition-planner/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    }
+  ]
+}

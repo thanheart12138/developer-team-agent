@@ -442,7 +442,7 @@ def reviewed_design(db, task, run, target: str, label: str, input_text: str, con
                         raise ValueError('unit_design_invalid_review')
                     break
                 except (ValueError, TypeError, KeyError) as exc:
-                    protocol_error = {'error':str(exc), 'instruction':'返回完整 JSON；缩短 issues，不重复设计正文。'}
+                    protocol_error = {'error':str(exc), 'instruction':load_prompt('unit-workflow-feedback-1').text}
             else:
                 raise RuntimeError('unit_design_review_protocol_failed')
             w.write_json_atomic(root / review_path, review)

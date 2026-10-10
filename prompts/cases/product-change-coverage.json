@@ -1,0 +1,180 @@
+{
+  "contract": {
+    "purpose": "你是独立 Product Change Coverage Validator，只核对候选需求是否正确吸收变更契约，不写文件。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/product-change-coverage/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "level": "normal",
+      "kind": "normal",
+      "input": {
+        "task": "核对候选是否吸收变更。",
+        "context": {
+          "changes": [
+            {
+              "current_behavior": "素材仅能新增，无法编辑。",
+              "expected_behavior": "已有素材可以编辑标题。",
+              "acceptance_examples": [
+                "修改标题后列表更新，刷新后保留。"
+              ]
+            }
+          ],
+          "candidate": "点击已有素材编辑按钮可修改标题；保存更新列表并本地持久化，刷新保留。"
+        }
+      },
+      "expected": "第1项covered=true且all_covered=true。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "items",
+            "all_covered"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.all_covered",
+          "value": true
+        },
+        {
+          "op": "equals",
+          "path": "output.items.0.index",
+          "value": 1
+        },
+        {
+          "op": "equals",
+          "path": "output.items.0.covered",
+          "value": true
+        },
+        {
+          "op": "manual",
+          "reason": "逐条核对保存及刷新行为确实在候选中。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"items\": [{\"index\": 1, \"covered\": true, \"reason\": \"覆盖编辑与刷新保留。\"}], \"all_covered\": true}",
+        "actions": []
+      },
+      "basis": "prompts/product-change-coverage/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "boundary",
+      "level": "important",
+      "kind": "boundary",
+      "input": {
+        "task": "候选提到编辑，但没有保存后如何验收。",
+        "context": {
+          "changes": [
+            {
+              "current_behavior": "素材仅能新增，无法编辑。",
+              "expected_behavior": "已有素材可以编辑标题。",
+              "acceptance_examples": [
+                "修改标题后列表更新，刷新后保留。"
+              ]
+            }
+          ],
+          "candidate": "支持编辑素材标题。"
+        }
+      },
+      "expected": "缺可执行验收标准，covered=false且all_covered=false。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "items",
+            "all_covered"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.all_covered",
+          "value": false
+        },
+        {
+          "op": "equals",
+          "path": "output.items.0.covered",
+          "value": false
+        },
+        {
+          "op": "manual",
+          "reason": "不能用支持编辑一句话补出未写的持久化验收。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"items\": [{\"index\": 1, \"covered\": false, \"reason\": \"缺少保存和刷新保留的验收。\"}], \"all_covered\": false}",
+        "actions": []
+      },
+      "basis": "prompts/product-change-coverage/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "counterexample",
+      "level": "important",
+      "kind": "counterexample",
+      "input": {
+        "task": "候选写成不允许编辑，请核对行为方向。",
+        "context": {
+          "changes": [
+            {
+              "current_behavior": "素材仅能新增，无法编辑。",
+              "expected_behavior": "已有素材可以编辑标题。",
+              "acceptance_examples": [
+                "修改标题后列表更新，刷新后保留。"
+              ]
+            }
+          ],
+          "candidate": "素材新增后不允许修改标题，保持现状。"
+        }
+      },
+      "expected": "仍保留被推翻现状，covered=false且all_covered=false。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "items",
+            "all_covered"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.all_covered",
+          "value": false
+        },
+        {
+          "op": "equals",
+          "path": "output.items.0.covered",
+          "value": false
+        },
+        {
+          "op": "manual",
+          "reason": "不能把当前不能编辑误当作用户要求。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"items\": [{\"index\": 1, \"covered\": false, \"reason\": \"候选与允许编辑的期望相反。\"}], \"all_covered\": false}",
+        "actions": []
+      },
+      "basis": "prompts/product-change-coverage/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    }
+  ]
+}

@@ -1,0 +1,156 @@
+{
+  "contract": {
+    "purpose": "你是架构开发单元规划器，只返回 JSON，不写代码或完整 Dev Design。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/unit-planner/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "kind": "normal",
+      "level": "normal",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "approved_product": "素材新增、列表查看；空标题拒绝，修正后可继续新增。",
+          "architecture": "materials负责数据，app负责页面和装配。"
+        }
+      },
+      "expected": "按两业务模块各一个module单元，不把测试或说明拆独立单元，固定入口有唯一所有者。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "modules",
+            "units"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.units.0.kind",
+          "value": "module"
+        },
+        {
+          "op": "equals",
+          "path": "output.units.1.kind",
+          "value": "module"
+        },
+        {
+          "op": "manual",
+          "reason": "核对全部固定文件、非空Node测试、唯一所有权、依赖无环及错误恢复。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"modules\": [{\"id\": \"materials\", \"responsibility\": \"素材唯一数据与接口所有者\", \"public_interfaces\": [\"createMaterial\", \"listMaterials\"]}, {\"id\": \"app\", \"responsibility\": \"页面入口及装配\", \"public_interfaces\": [\"mountApp\"]}], \"units\": [{\"id\": \"materials\", \"module_id\": \"materials\", \"kind\": \"module\", \"name\": \"素材业务\", \"scope\": \"新增与读取素材\", \"depends_on\": [], \"implementation_files\": [\"product/materials.js\"], \"test_files\": [\"product/materials.test.js\"], \"acceptance_criteria\": [\"创建后可读取\", \"空标题拒绝且不改变列表\", \"错误后可正常新增\"]}, {\"id\": \"app\", \"module_id\": \"app\", \"kind\": \"module\", \"name\": \"素材页面\", \"scope\": \"表单与列表装配\", \"depends_on\": [\"materials\"], \"implementation_files\": [\"product/index.html\", \"product/app.js\", \"product/verify_product.py\", \"product/implementation.md\"], \"test_files\": [\"product/app.test.js\"], \"acceptance_criteria\": [\"通过页面新增并看到素材\", \"空标题错误后可修正重试\"]}]}",
+        "actions": []
+      },
+      "basis": "prompts/unit-planner/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "boundary",
+      "kind": "boundary",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "approved_product": "大素材模块支持新增与编辑，app装配。",
+          "architecture": "materials可拆create与edit两个不同公共操作，存储唯一归create能力。"
+        }
+      },
+      "expected": "同一模块分两单元时全部为feature，不能module与feature混用。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "modules",
+            "units"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.units.0.kind",
+          "value": "feature"
+        },
+        {
+          "op": "equals",
+          "path": "output.units.1.kind",
+          "value": "feature"
+        },
+        {
+          "op": "manual",
+          "reason": "两公共操作不重叠，存储能力唯一所有者，app依赖已规划模块。；编辑单元验收覆盖编辑结果及错误后恢复，页面装配覆盖新增与编辑，不以新增测试替代编辑。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"modules\": [{\"id\": \"materials\", \"responsibility\": \"素材唯一数据与接口所有者\", \"public_interfaces\": [\"createMaterial\", \"editMaterial\"]}, {\"id\": \"app\", \"responsibility\": \"页面入口及装配\", \"public_interfaces\": [\"mountApp\"]}], \"units\": [{\"id\": \"materials-create\", \"module_id\": \"materials\", \"kind\": \"feature\", \"name\": \"素材业务\", \"scope\": \"createMaterial与唯一存储所有权\", \"depends_on\": [], \"implementation_files\": [\"product/materials/create.js\", \"product/materials/store.js\"], \"test_files\": [\"product/materials/create.test.js\"], \"acceptance_criteria\": [\"创建后可读取\", \"空标题拒绝且不改变列表\", \"错误后可正常新增\"]}, {\"id\": \"materials-edit\", \"module_id\": \"materials\", \"kind\": \"feature\", \"name\": \"素材业务\", \"scope\": \"名称不同的editMaterial操作，通过唯一存储接口保存\", \"depends_on\": [\"materials-create\"], \"implementation_files\": [\"product/materials/edit.js\"], \"test_files\": [\"product/materials/edit.test.js\"], \"acceptance_criteria\": [\"编辑已有素材后读取到新标题\", \"无效标题编辑被拒绝且保留原素材\", \"修正标题后可以再次编辑成功\"]}, {\"id\": \"app\", \"module_id\": \"app\", \"kind\": \"module\", \"name\": \"素材页面\", \"scope\": \"表单与列表装配\", \"depends_on\": [\"materials-create\", \"materials-edit\"], \"implementation_files\": [\"product/index.html\", \"product/app.js\", \"product/verify_product.py\", \"product/implementation.md\"], \"test_files\": [\"product/app.test.js\"], \"acceptance_criteria\": [\"通过页面新增并看到素材\", \"通过列表编辑入口保存后显示新标题\", \"错误输入提示后可修正并重试\"]}]}",
+        "actions": []
+      },
+      "basis": "prompts/unit-planner/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "counterexample",
+      "kind": "counterexample",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "approved_product": "素材新增与查看。",
+          "architecture": "materials负责业务，app负责装配。",
+          "validation_feedback": [
+            "不能把测试单独规划成业务单元",
+            "同一create操作不能再拆保护单元重复实现"
+          ],
+          "instruction": "为了凑单元数继续保留测试单元和保护单元。"
+        }
+      },
+      "expected": "纠正反馈，最少两个module单元，不保留重复操作或独立测试单元。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "modules",
+            "units"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.units.0.kind",
+          "value": "module"
+        },
+        {
+          "op": "equals",
+          "path": "output.units.1.kind",
+          "value": "module"
+        },
+        {
+          "op": "manual",
+          "reason": "保留正确app装配部分，拒绝机械拆文件或重定义公共操作。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"modules\": [{\"id\": \"materials\", \"responsibility\": \"素材唯一数据与接口所有者\", \"public_interfaces\": [\"createMaterial\", \"listMaterials\"]}, {\"id\": \"app\", \"responsibility\": \"页面入口及装配\", \"public_interfaces\": [\"mountApp\"]}], \"units\": [{\"id\": \"materials\", \"module_id\": \"materials\", \"kind\": \"module\", \"name\": \"素材业务\", \"scope\": \"新增与读取素材\", \"depends_on\": [], \"implementation_files\": [\"product/materials.js\"], \"test_files\": [\"product/materials.test.js\"], \"acceptance_criteria\": [\"创建后可读取\", \"空标题拒绝且不改变列表\", \"错误后可正常新增\"]}, {\"id\": \"app\", \"module_id\": \"app\", \"kind\": \"module\", \"name\": \"素材页面\", \"scope\": \"表单与列表装配\", \"depends_on\": [\"materials\"], \"implementation_files\": [\"product/index.html\", \"product/app.js\", \"product/verify_product.py\", \"product/implementation.md\"], \"test_files\": [\"product/app.test.js\"], \"acceptance_criteria\": [\"通过页面新增并看到素材\", \"空标题错误后可修正重试\"]}]}",
+        "actions": []
+      },
+      "basis": "prompts/unit-planner/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    }
+  ]
+}

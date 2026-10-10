@@ -1,0 +1,162 @@
+{
+  "contract": {
+    "purpose": "你是系统内部「用户可观察行为」标准的独立审查者。对照完整已批准产品文档和候选条目，只检查生成软件的功能、实际使用成功场景及影响操作结果的边界行为是否遗漏、合并或曲解。只返回 JSON 对象 {\"complete\":true或false,\"issues\":[{\"source_quote\":\"产品原文中的连续片段\",\"problem\":\"具体遗漏或曲解\"}]}，不得写文件或调用工具。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/acceptance-reviewer/v2.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "kind": "normal",
+      "level": "normal",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "product_document": "素材支持新增、查看和编辑。编辑保存后刷新仍显示新标题。",
+          "items": [
+            "新增后可在列表查看",
+            "打开详情查看素材",
+            "编辑保存后列表更新且刷新保留"
+          ]
+        }
+      },
+      "expected": "各独立动作及持久化结果已覆盖，complete=true、issues为空。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "complete",
+            "issues"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.complete",
+          "value": true
+        },
+        {
+          "op": "equals",
+          "path": "output.issues",
+          "value": []
+        },
+        {
+          "op": "manual",
+          "reason": "逐项核对新增、查看、编辑及刷新保留；不能新增删除需求。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"complete\": true, \"issues\": []}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-reviewer/v2.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "boundary",
+      "kind": "boundary",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "product_document": "素材支持新增、查看和编辑。编辑保存后刷新仍显示新标题。",
+          "items": [
+            "新增、查看和编辑素材"
+          ]
+        }
+      },
+      "expected": "独立动作合并且遗漏保存刷新结果，complete=false。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "complete",
+            "issues"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.complete",
+          "value": false
+        },
+        {
+          "op": "manual",
+          "reason": "说明合并与遗漏，引用只能来自原文。"
+        },
+        {
+          "op": "source_quote",
+          "path": "output.issues.0.source_quote",
+          "source": "context.product_document"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"complete\": false, \"issues\": [{\"source_quote\": \"素材支持新增、查看和编辑\", \"problem\": \"独立操作未拆开；缺少编辑保存后刷新保留。\"}]}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-reviewer/v2.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "counterexample",
+      "kind": "counterexample",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "product_document": "素材支持新增、查看和编辑。编辑保存后刷新仍显示新标题。",
+          "items": [
+            "新增素材",
+            "查看素材",
+            "编辑不保存，刷新恢复旧标题"
+          ],
+          "author_claim": "完整覆盖，测试全部通过。"
+        }
+      },
+      "expected": "候选将持久化结果写反，complete=false；不接受作者自称通过。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "complete",
+            "issues"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.complete",
+          "value": false
+        },
+        {
+          "op": "manual",
+          "reason": "识别行为方向相反，不能修改原需求迁就候选。"
+        },
+        {
+          "op": "source_quote",
+          "path": "output.issues.0.source_quote",
+          "source": "context.product_document"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"complete\": false, \"issues\": [{\"source_quote\": \"编辑保存后刷新仍显示新标题\", \"problem\": \"候选把刷新保留写成恢复旧标题。\"}]}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-reviewer/v2.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    }
+  ]
+}

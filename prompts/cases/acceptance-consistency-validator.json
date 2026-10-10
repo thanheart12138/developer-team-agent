@@ -1,0 +1,176 @@
+{
+  "contract": {
+    "purpose": "你是独立 Acceptance Interpretation Consistency Validator，不重新解决产品问题，也不修改文件。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/acceptance-consistency-validator/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "level": "normal",
+      "kind": "normal",
+      "input": {
+        "task": "我修改素材标题后刷新又变回去了，应保留新标题。",
+        "context": {
+          "formal_product": "编辑后保存并刷新保留。",
+          "triage": {
+            "classification": "implementation_defect",
+            "items": [
+              {
+                "current_behavior": "刷新恢复旧标题",
+                "expected_behavior": "刷新保留新标题"
+              }
+            ]
+          }
+        }
+      },
+      "expected": "方向与现有需求一致，consistent=true且clarifying_question=null。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "consistent",
+            "contradictions",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.consistent",
+          "value": true
+        },
+        {
+          "op": "equals",
+          "path": "output.contradictions",
+          "value": []
+        },
+        {
+          "op": "equals",
+          "path": "output.clarifying_question",
+          "value": null
+        },
+        {
+          "op": "manual",
+          "reason": "分类说明实现如何违反持久化需求，不把缺陷误作需求变更。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"consistent\": true, \"contradictions\": [], \"clarifying_question\": null}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-consistency-validator/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "boundary",
+      "level": "important",
+      "kind": "boundary",
+      "input": {
+        "task": "编辑后它没改。",
+        "context": {
+          "triage": {
+            "classification": "implementation_defect",
+            "items": [
+              {
+                "current_behavior": "标题未改",
+                "expected_behavior": "刷新持久化"
+              }
+            ]
+          }
+        }
+      },
+      "expected": "未区分保存即时失效或刷新丢失，consistent=false且一个澄清问题。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "consistent",
+            "contradictions",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.consistent",
+          "value": false
+        },
+        {
+          "op": "manual",
+          "reason": "澄清必须消除行为方向／时机歧义，不自行补观察。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"consistent\": false, \"contradictions\": [\"原句没有说明是在保存后还是刷新后未改。\"], \"clarifying_question\": \"是保存后立即没变化，还是刷新后恢复旧值？\"}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-consistency-validator/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "counterexample",
+      "level": "important",
+      "kind": "counterexample",
+      "input": {
+        "task": "两个问题：1。新增按钮失效。2。现在要支持团队共享素材。",
+        "context": {
+          "formal_product": "新增与本地私有素材。",
+          "triage": {
+            "classification": "implementation_defect",
+            "items": [
+              {
+                "current_behavior": "新增按钮失效",
+                "expected_behavior": "新增可用"
+              },
+              {
+                "current_behavior": "仅本地私有",
+                "expected_behavior": "团队共享"
+              }
+            ]
+          }
+        }
+      },
+      "expected": "总体分类漏掉更早需求失效阶段，consistent=false；解释两个编号项。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "consistent",
+            "contradictions",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.consistent",
+          "value": false
+        },
+        {
+          "op": "manual",
+          "reason": "覆盖所有编号且总体选择最早失效阶段。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"consistent\": false, \"contradictions\": [\"第二项是需求范围变更，总体不能仅归实现缺陷。\"], \"clarifying_question\": \"团队共享是否作为本轮正式需求变更？\"}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-consistency-validator/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    }
+  ]
+}

@@ -8,52 +8,39 @@ from ..models import Step, StepStatus, TaskStatus
 from . import repair_runtime as repair
 from .container_execution import product_manifest
 from .contracts import ToolCall
+from .prompt_registry import load_prompt, PROMPT_ROOT, active_versions
 from .tools import TOOL_SCHEMAS, ToolRuntime
 from .unit_workflow import UnitTools, RUN_UNIT_TESTS_SCHEMA, SUBMIT_UNIT_SCHEMA
 
-LEGACY_PROMPT = '''你负责同一个已有网站返修任务的调查、计划、实现和修复。原始反馈与批准需求是依据，不能弱化断言来通过测试。
-在授权 product 内按修改效果选择文件，不按旧卡片所有权选文件。可先 update_plan；用 search 定位，按清单和行范围 read，再 write/replace。read 默认 200 行，片段和哈希不是全文；缺失或变更的正文可补读。
-先运行固定全量 run_unit_tests，依据 output.passed 判断；完整日志留档，工具返回测试摘要、失败详情与原日志查询引用。同版本已通过时重复自测复用真实证据，reused=true 不代表再次运行。修改后必须重新自测。
-原缺陷已修复、当前版本自测通过且没有未完成修改时，调用 submit_unit_for_test；浏览器验证和原始目标审查由程序在提交后执行，无需为代替程序验证而反复调查验证脚本。自测成功不强制结束，确有必要仍可读或修改，不能省略尚未完成的修复。
-submit_unit_for_test 或 request_decision 必须为本批最后动作。普通完成文本不能代替提交。
-独立上下文接力仍是同一任务：context_session.recent_changes列出自上一边界后的成功修改，随后已运行boundary_request_id指向的真实自测。以development_state.current_version_passed判断当前证据，不因接力重复确认修改和测试先后；它不代表所有业务目标自动完成。
-更新计划不是提交前置条件；确需更新时使用update_plan的steps与reason，可与submit_unit_for_test同批，提交放最后，避免为计划状态单开请求。
-改变业务、重要接口或数据规则必须 request_decision；回答不等于自动更新批准设计，正式设计未更新时不能擅自实施产品大改动。
-程序负责冻结、测试、启动、浏览器与独立审查。验证失败后在原会话继续修复。禁止任意 shell、删除、安装依赖、修改正式需求／审计／预算。'''
-
-PREVIOUS_PROMPT = LEGACY_PROMPT + '''
-本尝试使用上下文契约v2，以下说明优先于上文旧字段说明：current_task_facts是程序核对的当前事实，原反馈只在input；其中self_test是唯一当前自测入口，latest_validation_failure是最新独立验证失败，不得被旧自测覆盖。
-work_progress是模型通过update_plan保存的判断，不是程序验证。可选findings记录已确认原因和依据，open_questions记录未解决疑问，next_action记录剩余工作；版本适用性为needs_review时须核对，不能当作已完成证据。已有清晰进度无需为了更新计划另开调用。
-累计修改只证明成功写入及最新写入版本是否仍适用，不证明每次历史修改仍有效。目标未独立审查不表示已实现或未实现。必要阅读／修改继续允许；完成业务修复且当前自测通过时仍须显式提交。历史查询、实际正文范围和权限保持。'''
-
-
-PREVIOUS_PROGRESS_PROMPT = PREVIOUS_PROMPT + '''
-调查推进规则：每次读取或搜索的description说明尚未解决的具体问题，以及它如何影响本次修复或验收；优先使用已提供的同版本正文与事实，不为重复确认扩大调查。
-失败原因、批准接口／业务预期和可实施修改方案已有依据，且没有影响修改的未决问题时，优先完成相关修改并运行全量自测；缺少依据继续调查，自测失败再按实际失败定位。必要调查始终允许，不按读取次数强制修改。
-与本次反馈无关、并非本次修改引入的已有疑点先记录；不影响本次修复或验收时继续当前任务，不把全局符合性检查当作修改前置。涉及本次设计冲突、业务风险或无法判断成功时继续针对性调查，必要时request_decision。
-独立读取和参数已确定的多处修改尽量同批；需要上一结果确定下一参数、版本或状态时分批，修改结束再自测。不能无条件把修改、自测、提交同批，当前通过仍需判断业务完成并显式提交。程序负责独立浏览器与目标审查，无具体未决问题时无需预先通读验证脚本。
-确有需要保存的原因、依据和剩余疑问时可用既有update_plan字段与正常动作合批；不要求每轮更新，也不为了计划另开调用。'''
-
-
-PREVIOUS_NO_REVIEW_PROMPT = PREVIOUS_PROGRESS_PROMPT.replace(
-    '浏览器验证和原始目标审查由程序在提交后执行', '浏览器验证由程序在提交后执行').replace(
-    '程序负责冻结、测试、启动、浏览器与独立审查。', '程序负责冻结、测试、启动和浏览器验证。').replace(
-    '程序负责独立浏览器与目标审查', '程序负责实际浏览器验证') + '''
-本次提交后的验证为全量测试、启动和实际浏览器验证，不再有独立模型目标／覆盖审查；通过后等待用户验收，原始目标由用户确认，不自动认定测试覆盖完整需求。'''
-
-PROMPT = PREVIOUS_NO_REVIEW_PROMPT + '''
-search可用path限定授权内文件或目录；已知接口或模块位置时优先限定范围，未知位置仍可全域搜索。范围搜索片段不是全文，必要正文继续按实际缺失范围read。'''
+LEGACY_PROMPT = load_prompt("repair-executor", version="v1").text
+PREVIOUS_PROMPT = load_prompt("repair-executor", version="v2").text
+PREVIOUS_PROGRESS_PROMPT = load_prompt("repair-executor", version="v3").text
+PREVIOUS_NO_REVIEW_PROMPT = load_prompt("repair-executor", version="v4").text
+PROMPT = load_prompt("repair-executor", version="v5").text
 
 
 def select_prompt(state: dict) -> str:
     """新会话使用推进规则，旧会话只恢复其原哈希绑定的有效提示词。"""
     if not state.get('session'):
-        return PROMPT
-    candidates = (PREVIOUS_PROMPT, PREVIOUS_PROGRESS_PROMPT, PREVIOUS_NO_REVIEW_PROMPT, PROMPT) if uses_current_facts(state) else (LEGACY_PROMPT,)
+        return load_prompt('repair-executor').text
+    versions = json.loads((PROMPT_ROOT / 'registry.json').read_text())['prompts']['repair-executor']['versions']
+    candidates = tuple(load_prompt('repair-executor', version=v).text for v in versions
+                       if (v != 'v1') == uses_current_facts(state))
     # 未知绑定仍拒绝，不将旧历史静默迁移到新的模型指令。
     for candidate in candidates:
         if hashlib.sha256(candidate.encode()).hexdigest() == state['session'].get('prompt_hash'):
             return candidate
+    raise RuntimeError('repair_session_binding_changed')
+
+
+
+def registered_prompt(text: str):
+    """将会话固定正文映射回已登记身份，未知正文不发送。"""
+    versions = json.loads((PROMPT_ROOT / 'registry.json').read_text())['prompts']['repair-executor']['versions']
+    for version in versions:
+        prompt = load_prompt('repair-executor', version=version)
+        if prompt.text == text:
+            return prompt
     raise RuntimeError('repair_session_binding_changed')
 
 
@@ -85,8 +72,8 @@ def current_facts(context: dict, state: dict, history: list[dict], tools) -> dic
                 change['operations'].append({**ref, 'tool_name': action['tool_name'],
                                              'description': action.get('parameters', {}).get('description', '')})
                 change['last_write_sha256'] = entry.get('repair_versions_after', {}).get(path)
-        if action.get('tool_name') == 'run_unit_tests' and valid_boundary and index >= boundary:
-            latest_test = (output, ref)
+        if action.get('tool_name') in {'run_unit_tests', 'verify_and_submit'} and valid_boundary and index >= boundary:
+            latest_test = (output.get('self_test', output) if action.get('tool_name') == 'verify_and_submit' else output, ref)
     test = {'state': 'not_tested'}
     if latest_test:
         output, ref = latest_test
@@ -191,7 +178,7 @@ def project_test_history(history: list[dict]) -> list[dict]:
         if result.get('status') == 'succeeded' and isinstance(output, dict):
             if action.get('tool_name') == 'run_unit_tests':
                 output = self_test_view(output, ref)
-            elif action.get('tool_name') == 'submit_unit_for_test' and output.get('self_test'):
+            elif action.get('tool_name') in {'submit_unit_for_test', 'verify_and_submit'} and output.get('self_test'):
                 output = {**output, 'self_test': self_test_view(output['self_test'], ref)}
             else:
                 projected.append(entry)
@@ -224,6 +211,10 @@ SEARCH_SCHEMA = schema('search', '在任务授权文件内搜索字面文本，�
 
 SCOPED_SEARCH_SCHEMA = schema('search', '搜索授权内字面文本，可用path限定文件或目录；默认全域，每页最多50条，续查保持范围并携带version和next_cursor。',
     {**SEARCH_SCHEMA['function']['parameters']['properties'], 'path': {'type': 'string', 'minLength': 1}}, ['query'])
+
+VERIFY_AND_SUBMIT_SCHEMA = schema('verify_and_submit',
+    '明确声明业务修改完成并请求提交：固定全量自测仅当前版本通过才提交，失败返回修复。本批最后动作，仍需独立网页验证。',
+    {'description': {'type': 'string', 'minLength': 1}}, ['description'])
 
 
 class RepairTools(UnitTools):
@@ -290,6 +281,19 @@ class RepairTools(UnitTools):
                     'guidance': '当前完整产品版本自测已通过，未再次运行；若修复已完成，请显式提交，程序负责后续验证。'}
         return {**super()._run_unit_tests(), 'reused': False}
 
+    def _verify_and_submit(self) -> dict:
+        """仅响应模型明确提交意图，失败或版本变化时不交付。"""
+        state = repair.load(self.workspace)
+        if not state.get('session', {}).get('completion_tool_enabled'):
+            raise ValueError('repair_completion_tool_not_enabled')
+        if state['state'] != 'executing' or any(not item.get('answer') for item in state['session'].get('decisions', [])):
+            raise ValueError('repair_completion_blocked')
+        # 复用固定全量自测与版本门禁，普通自测仍不会自动提交。
+        tested = self._run_unit_tests()
+        if not tested.get('passed') or not self.restore_self_test(tested):
+            return {'submitted': False, 'self_test': tested, 'guidance': '自测失败或版本变化，继续修复，未提交。'}
+        return {**self._submit_unit_for_test(), 'submitted': True}
+
     def _write(self, path: str, content: str, overwrite: bool) -> dict:
         """允许相关新增普通产品文件，写入后旧自测版本自然失效。"""
         target = self._product_path(path)
@@ -304,7 +308,7 @@ class RepairTools(UnitTools):
 
     def execute(self, call: ToolCall):
         """仅调度受控计划、决定和原文件／自测／提交工具。"""
-        if call.tool_name in {'update_plan', 'request_decision', 'search'}:
+        if call.tool_name in {'update_plan', 'request_decision', 'search', 'verify_and_submit'}:
             return ToolRuntime.execute(self, call)
         if call.tool_name == 'read':
             self._refresh_files()
@@ -412,7 +416,10 @@ def execute(db, task, run) -> None:
         files = product_manifest(root / 'product')
         tests = {p: (root / 'product' / p).read_text() for p in files
                  if p.endswith(('.test.js', '.test.cjs', '.test.mjs')) or p == 'verify_product.py'}
-        state['session'] = {**binding, 'context_contract': 'v2', 'plan': None, 'decisions': [], 'original_tests': tests}
+        state['session'] = {**binding, 'context_contract': 'v2', 'plan': None, 'decisions': [], 'original_tests': tests,
+                            'completion_tool_enabled': int(registered_prompt(selected_prompt).version[1:]) >= 6,
+                            'prompt_versions': {**active_versions(),
+                                                'repair-executor': registered_prompt(selected_prompt).version}}
         repair.save(root, state)
     checkpoint = root / f'evidence/repair-session-{session_id}-checkpoint.json'
     if checkpoint.is_file():
@@ -428,18 +435,20 @@ def execute(db, task, run) -> None:
         for entry in reversed(entries[state['session'].get('validation_boundary', 0):]):
             action = entry.get('action', {}).get('tool_name')
             output = entry.get('result', {}).get('output', {})
-            if action == 'submit_unit_for_test' and tools.restore_submission(output):
+            if action in {'submit_unit_for_test', 'verify_and_submit'} and tools.restore_submission(output):
                 break
-            if action == 'run_unit_tests':
-                tools.restore_self_test(output)
+            if action in {'run_unit_tests', 'verify_and_submit'}:
+                tools.restore_self_test(output.get('self_test', output) if action == 'verify_and_submit' else output)
                 break
     schemas = [s for s in TOOL_SCHEMAS if s['function']['name'] in {'read', 'write', 'replace'}]
     schemas += [RUN_UNIT_TESTS_SCHEMA, SUBMIT_UNIT_SCHEMA,
                 PROGRESS_SCHEMA if uses_current_facts(state) else PLAN_SCHEMA, DECISION_SCHEMA,
-                SCOPED_SEARCH_SCHEMA if selected_prompt == PROMPT else SEARCH_SCHEMA]
+                SCOPED_SEARCH_SCHEMA if int(registered_prompt(selected_prompt).version[1:]) >= 5 else SEARCH_SCHEMA]
+    if state['session'].get('completion_tool_enabled'):
+        schemas.append(VERIFY_AND_SUBMIT_SCHEMA)
     if tools.submitted_hashes is None:
         from .repair_objectives import pending
-        w.model_tool_loop(db, task, run, selected_prompt, state['feedback'],
+        w.model_tool_loop(db, task, run, registered_prompt(selected_prompt), state['feedback'],
             {'repair_session': True, 'session_id': session_id, 'unit_file_scope': tools.self_test_files,
              'approved_documents': [p for p in sorted(str(p.relative_to(root)) for p in tools.readable) if p.startswith('docs/')],
              'plan': state['session']['plan'], 'decisions': state['session']['decisions'],

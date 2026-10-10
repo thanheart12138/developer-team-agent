@@ -126,32 +126,28 @@ def ensure_scaffold(db, task, run, tools) -> None:
             break
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             error = str(exc)
-            instruction = ("只修正结构错误并返回完整 JSON；不得向用户提问。"
-                           "按业务所有权合并同域 store/view，保留公共接口和逐模块 todo 测试。")
+            instruction = (load_prompt('scaffold-workflow-feedback-1').text)
             if error == "scaffold_product_entries_required":
-                instruction += (" files 必须同时包含 product/index.html、product/styles.css、"
-                                "product/verify_product.py、product/implementation.md，并全部登记到 app/ui。")
+                instruction += (load_prompt('scaffold-workflow-feedback-2').text)
             elif error.startswith("scaffold_file_invalid:"):
-                instruction += (" files 中的无效键是 " + error.split(":", 1)[1]
-                                + "；所有文件键都必须是 product/ 开头的规范相对路径。")
+                instruction += (load_prompt('scaffold-workflow-feedback-3').text + error.split(":", 1)[1]
+                                + load_prompt('scaffold-workflow-feedback-4').text)
             elif error.startswith("scaffold_module_file_missing:"):
                 _, module_id, path = error.split(":", 2)
                 expected = path if path.startswith("product/") else "product/" + path
-                instruction += (" 模块 " + module_id + " 声明的 " + path
-                                + " 未与 files 键逐字匹配；核对是否应写 " + expected
-                                + "，并让 implementation_files／test_file 与 files 键完全一致。")
+                instruction += (load_prompt('scaffold-workflow-feedback-5').text + module_id + load_prompt('scaffold-workflow-feedback-6').text + path
+                                + load_prompt('scaffold-workflow-feedback-7').text + expected
+                                + load_prompt('scaffold-workflow-feedback-8').text)
             elif error.startswith("scaffold_module_file_duplicate:"):
-                instruction += (" 文件 " + error.split(":", 1)[1] + " 已被其他模块声明；"
-                                "每个文件只能有一个模块所有者。")
+                instruction += (load_prompt('scaffold-workflow-feedback-9').text + error.split(":", 1)[1] + load_prompt('scaffold-workflow-feedback-10').text)
             elif error == "scaffold_module_invalid":
-                instruction += " module.id 必须是至少两个字符的英文小写短横线标识，且不得重复。"
+                instruction += load_prompt('scaffold-workflow-feedback-11').text
             elif error.startswith("scaffold_file_limit_exceeded:"):
-                instruction += " 文件必须不超过 20 个；继续合并同一业务域实现文件，不得删除固定入口。"
+                instruction += load_prompt('scaffold-workflow-feedback-12').text
             elif error.startswith("scaffold_unowned_files:"):
-                instruction += " 把错误列出的每个文件登记到唯一模块；入口、样式、说明和验证脚本归 app/ui。"
+                instruction += load_prompt('scaffold-workflow-feedback-13').text
             elif error.startswith(("scaffold_javascript_invalid:", "scaffold_test_execution_failed:")):
-                instruction += (" 骨架必须能被 Node 实际导入并发现 todo 测试；移除顶层循环引用访问，"
-                                "跨模块只保留延迟注入的接口形状，不得在模块初始化时互相求值。")
+                instruction += (load_prompt('scaffold-workflow-feedback-14').text)
             feedback = {"error": error, "instruction": instruction}
     else:
         raise RuntimeError("scaffold_validation_failed")

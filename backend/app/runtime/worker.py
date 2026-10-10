@@ -26,7 +26,7 @@ from .contracts import ModelRequest, ToolCall, ToolResult
 from .context_relay import DeepSeekContextRelay, covered_end_line
 from .model import ModelProtocolError, create_model_runtime
 from .repair_runtime import BudgetExceeded
-from .prompt_registry import PromptContent, sha256_text
+from .prompt_registry import PromptContent, sha256_text, load_prompt, compose_prompts, active_versions, bind_versions, rebind_prompt, PROMPT_ROOT
 from .tools import TOOL_SCHEMAS, QUERY_TOOL_SCHEMAS, ToolRuntime
 from .tool_summaries import ToolSummaryStore
 from .tracing import publish_live_response, safe_record_trace
@@ -62,9 +62,7 @@ VERIFICATION_EXECUTION_CONTRACT = {
 MAX_BUG_PLANNER_DECISIONS = 12
 MAX_BUG_EXTRA_INSPECTIONS = 3
 
-BASE_INSTRUCTIONS = """你是开发团队模拟器中的执行 Agent。严格完成当前 Step，不改变已确认需求、技术栈或流程。
-你只能通过提供的工具读写当前任务工作区；不得访问工作区外资源。文件操作必须使用相对路径。
-需要操作文件或运行命令时返回工具调用。所有要求完成且无需工具时才结束。"""
+BASE_INSTRUCTIONS = load_prompt('execution-base')
 
 
 def _action_signature(action: ToolCall) -> str:
@@ -641,9 +639,50 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                     history_key: str = "default",
                     runtime_step: Step | None = None,
                     refresh_diagnostic: Callable[[], dict] | None = None) -> str:
+    """绑定会话所有指令版本后执行循环，保留原工具协议与调用契约。"""
+    from .repair_runtime import load as load_repair, save as save_repair
+    repair = load_repair(workspace_for(task)) if context.get('repair_session') else None
+    versions = active_versions()
+    if repair:
+        # 新字段仅冻结当前等价迁移版本；已有主模板哈希仍由会话核对。
+        versions = repair['session'].get('prompt_versions',
+            json.loads((PROMPT_ROOT / 'registry.json').read_text()).get('migration_baseline', versions))
+        if 'prompt_versions' not in repair['session']:
+            if isinstance(instructions, PromptContent):
+                versions = {**versions, instructions.name: instructions.version}
+            repair['session']['prompt_versions'] = versions
+            save_repair(workspace_for(task), repair)
+    else:
+        # 每个旧流程逻辑会话独立绑定，恢复时不能跟随平台激活漂移。
+        binding_file = workspace_for(task) / 'evidence' / f'prompt-bindings-{run.id}-{sha256_text(history_key)[:12]}.json'
+        if binding_file.is_file():
+            versions = json.loads(binding_file.read_text())['versions']
+        else:
+            checkpoint = Path(run.checkpoint_path) if run.checkpoint_path else None
+            if checkpoint and checkpoint.is_file():
+                versions = dict(json.loads((PROMPT_ROOT / 'registry.json').read_text()).get('migration_baseline', versions))
+                if db is not None and run.id is not None:
+                    for trace in db.scalars(select(TraceRecord).where(TraceRecord.step_run_id == run.id,
+                            TraceRecord.type == 'model_request').order_by(TraceRecord.sequence)).all():
+                        meta = trace.metadata_json
+                        if meta.get('history_key') == history_key and meta.get('prompt_name') in versions:
+                            versions[meta['prompt_name']] = meta['prompt_version']
+            write_json_atomic(binding_file, {'versions': versions, 'history_key': history_key})
+    with bind_versions(versions):
+        return _model_tool_loop(db, task, run, rebind_prompt(instructions), input_text, context, tools,
+                                stop_when, tool_schemas, history_key, runtime_step, refresh_diagnostic)
+
+
+def _model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | PromptContent, input_text: str,
+                    context: dict, tools: ToolRuntime,
+                    stop_when: Callable[[], bool] | None = None,
+                    tool_schemas: list[dict] | None = None,
+                    history_key: str = "default",
+                    runtime_step: Step | None = None,
+                    refresh_diagnostic: Callable[[], dict] | None = None) -> str:
     # 在预算内循环调用模型、执行工具并保存过程证据。
     prompt = instructions if isinstance(instructions, PromptContent) else None
-    instruction_text = prompt.text if prompt else instructions
+    instruction_text = prompt if prompt else instructions
     checkpoint = Path(run.checkpoint_path) if run.checkpoint_path else None
     checkpoint_entries: list[dict] = []
     history: list[dict] = []
@@ -714,10 +753,10 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             if idle >= 8 and not self_test_current:
                 raise RuntimeError('unit_development_no_progress')
             context = {**context, 'unit_self_test':tools.self_test, 'unit_no_progress':{'calls_without_progress':idle,
-                'progress_basis':'实际文件版本变化或成功读取同版本的新范围；重复／失败读取不算进展。',
-                'instruction':('当前版本自测已通过，下一步只能立即调用 submit_unit_for_test，不要再读取或诊断。'
+                'progress_basis':load_prompt('worker-feedback-1').text,
+                'instruction':(load_prompt('worker-feedback-2').text
                                if self_test_current else
-                               '先自测，通过后提交；确有设计阻塞说明 BLOCKED，禁止重复读取未变文件' if idle >= 4 else ''),
+                               load_prompt('worker-feedback-3').text if idle >= 4 else ''),
                 'submission_required':True}}
         # 每次逻辑模型调用先计入阶段预算并持久化。
         run.model_call_count += 1
@@ -735,28 +774,28 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
         schemas = TOOL_SCHEMAS if tool_schemas is None else tool_schemas
         if any(schema["function"]["name"] in {"read", "exec"} for schema in schemas):
             schemas = schemas + QUERY_TOOL_SCHEMAS
-        tool_instructions = "每次工具调用用 description 简述目的。当前文件版本以 product_file_manifest 为准；tool_summaries 是当前循环按文件合并的最近读取／写入状态，不是历史流水。current_requested_data 返回本次请求的读取／查询数据，content_source=current_product_files 表示全文已在当前快照。已完整读取且哈希未变的文件不要重复读。development_state 是当前单元交接提示，文件齐备不等于测试通过；按 next_action 进行自测、修复或交接；require_unit_submission=true 时必须调用 submit_unit_for_test，普通完成文本不能替代提交。仅可使用本次提供的工具。earlier_summary_count 表示省略的文件状态数。"
+        tool_instructions = load_prompt('worker-tool-instructions-738-1')
         # 区分未验证的历史成功与程序已核对当前全产品版本的真实自测，避免接力后反复怀疑证据。
-        tool_instructions += ('旧成功不能替代当前证据；development_state.current_version_passed=true表示程序已核对真实自测与当前完整产品版本，独立上下文接力不会使它失效。仍需判断原缺陷和必要修改是否完成，再显式提交。'
-                              if context.get('repair_session') else '不得把历史执行成功当作当前代码已验证。')
+        tool_instructions += (load_prompt('worker-tool-instructions-740-1')
+                              if context.get('repair_session') else load_prompt('worker-tool-instructions-740-2'))
         if context.get('require_unit_submission'):
             # 开发自测与后续独立验证分开，旧失败不代表修改后的版本仍失败。
-            tool_instructions += '开发必须先 run_unit_tests 自测，当前版本通过后才 submit_unit_for_test。修改使旧结果过期，应重新自测；unit_self_test 返回真实自测结果，旧 unit_test_feedback/global_failure 是修复依据，不能认定未复测的新版本仍有原错误。'
-            tool_instructions += 'run_unit_tests 外层 status=succeeded 仅说明工具调用完成，测试是否通过以 output.passed 和内部命令结果为准；passed=false 必须根据真实失败输出修复。没有证据时不得认定结果来自缓存。'
+            tool_instructions += load_prompt('worker-tool-instructions-744-1')
+            tool_instructions += load_prompt('worker-tool-instructions-745-1')
         if context.get('repair_task'):
             # 旧失败和目标历史可按需读取，当前诊断及目标业务事实仍直接提供。
-            tool_instructions += 'unit_test_feedback.content_source=read_on_demand 时完整旧报告在 detail_path；目标 historical_evidence_ref 指向完整账本。当前错误以 unit_diagnostic 为准，原始目标原文、期望与复现不能省略或被旧报告替代。'
+            tool_instructions += load_prompt('worker-tool-instructions-748-1')
         if 'unit_file_scope' in context:
             # 按需读取仍须获得实际正文，清单与旧读取状态不能代替当前可用内容。
-            tool_instructions += '当前单元不自动附带所有产品文件全文。需要正文时按清单 read 必要文件；仅本次请求仍实际含相同版本和范围的正文时不要重复读，旧内容已省略或版本变化时允许补读。文件摘要与哈希不是正文。'
-            tool_instructions += 'verification_execution_contract 是当前系统验证职责，优先于旧卡的服务托管描述。允许在权限范围内修正冲突的服务／日志测试，必须保留批准业务行为和真实操作断言。'
+            tool_instructions += load_prompt('worker-tool-instructions-751-1')
+            tool_instructions += load_prompt('worker-tool-instructions-752-1')
         if context.get('require_unit_submission') and context['unit_no_progress']['calls_without_progress'] >= 4:
             # 无进展提醒同步提升到系统指令，避免只埋在较长文件上下文中被忽略。
-            tool_instructions += ('【交接提醒】当前版本自测已通过，本轮只能调用 submit_unit_for_test，不要读取、诊断或重新测试。'
+            tool_instructions += (load_prompt('worker-tool-instructions-755-1')
                                   if self_test_current else
-                                  '【无进展提醒】已连续多轮没有文件版本变化，不要再次读取已提供的文件。缺交付文件则补齐；无需修改时先 run_unit_tests，当前版本通过后立即 submit_unit_for_test。确有设计阻塞只输出 BLOCKED: 和具体问题。剩余无进展额度耗尽将停止，不会自动结束开发或放宽权限。')
+                                  load_prompt('worker-tool-instructions-755-2'))
         if any(schema["function"]["name"] == "get_tool_execution_detail" for schema in schemas):
-            tool_instructions += "需要旧操作时用 get_file_change_history 或 get_model_call_summaries，需要原始历史参数/结果时用 get_tool_execution_detail；最新文件内容用 read。"
+            tool_instructions += load_prompt('worker-tool-instructions-759-1')
         request_id = str(uuid.uuid4())
         request_context = {**build_tool_context(task, run, context, history, history_key),
                            "model_call_id": request_id,
@@ -785,11 +824,14 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             request_context['development_state'] = {'self_test_ref': 'unit_self_test',
                 'current_version_passed': self_test_current,
                 'next_action': 'submit_if_repair_complete' if self_test_current else 'continue_work_and_self_test',
-                'instruction': ('原缺陷已修复且没有未完成修改时，请显式提交；程序负责后续浏览器和目标审查。'
-                                if self_test_current else '完成修复后运行当前版本全量自测，再明确提交。'),
+                'instruction': (load_prompt('worker-feedback-4').text
+                                if self_test_current else load_prompt('worker-feedback-5').text),
                 'automatic_submit': False}
-            tool_instructions += '这是任务级连续返修会话，文件权限按当前产品目录，不按旧卡片。自测成功仍允许必要阅读或修改；修改后重新自测。关键决定用 request_decision 明确暂停，不能用 BLOCKED 文本或结束文本代替受控工具。'
-        tool_instructions += 'model_call_budget 是当前 Step 的实际逻辑调用预算，已用包含本次，剩余为本次之后可请求次数；传输重试不计入该字段，它不是 HTTP 次数上限。安排必要修改、自测和提交，预算不会因接力或恢复重置。'
+            tool_instructions += load_prompt('worker-tool-instructions-791-1')
+        tool_instructions += load_prompt('worker-tool-instructions-792-1')
+        if context.get('repair_session') and primary_runtime.provider != 'deepseek':
+            # 所有返修供应商都保留会话工具历史，避免只看到上一批片段而重复补读。
+            request_context['tool_history'] = history
         if primary_runtime.provider == "deepseek":
             # 当前会话完整续传；安全边界之前的原始历史保留在审计而不拼接到新会话。
             protocol_history, relay_context = relay.project(history, request_context) if relay else (history, {})
@@ -799,9 +841,9 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                 current_calls = {entry.get('action', {}).get('call_id') for entry in protocol_history}
                 request_context['current_requested_data'] = [item for item in request_context.get('current_requested_data', [])
                                                            if item.get('call_id') in current_calls]
-                tool_instructions += 'context_session 表示已从完整修改批次后开始新会话。carried_file_context 是以前实际读过或写过范围的当前版本正文，优先使用；未提供或截断的范围仍可按需读取。历史原始思考与结果只读保存在证据中，可用查询工具检索。'
-                tool_instructions += 'diagnostic_report_refs 仅为已读诊断的查询引用，报告针对当时版本，不代表当前失败；当前结果以 unit_diagnostic 及其版本适用性为准。'
-                tool_instructions += 'carried_file_refs 仅记录未携带正文的已知范围，不能视作当前可用代码；确需这些内容时可以按原权限 read。'
+                tool_instructions += load_prompt('worker-tool-instructions-802-1')
+                tool_instructions += load_prompt('worker-tool-instructions-803-1')
+                tool_instructions += load_prompt('worker-tool-instructions-804-1')
                 if context.get('repair_session') and tools.self_test and tools.restore_self_test(tools.self_test):
                     # 通过诊断已完成独立上下文交接，只传版本与状态，完整输出可从审计查询。
                     request_context['unit_self_test'] = {k: v for k, v in tools.self_test.items() if k != 'result'}
@@ -832,14 +874,9 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
             if uses_current_facts(actual):
                 # 新尝试在最后投影当前事实，不影响旧会话、实际协议或正文补读判定。
                 request_context = current_facts(request_context, actual, history, tools)
-                tool_instructions = ('每次工具调用用description简述目的。current_task_facts是当前事实，work_progress是模型判断；'
-                    '最新独立验证失败不能被旧自测覆盖。product_file_manifest是当前文件版本；'
-                    'carried_file_context和协议工具消息只证明实际提供的正文范围，缺失／截断／变更范围可按权限补读。'
-                    'current_requested_data是本次查询结果。历史按需用get_file_change_history、get_model_call_summaries、'
-                    'get_tool_execution_detail查询。verification_execution_contract是程序验证职责。'
-                    'model_call_budget是逻辑调用预算，actual_request_budget是含失败和重试的HTTP预算，接力或恢复不重置。'
-                    '只能使用提供的工具；仍需判断业务完成并显式submit_unit_for_test，必要修改后重新自测，关键决定用request_decision暂停。')
-        request = ModelRequest(instructions=f"{BASE_INSTRUCTIONS}\n\n{instruction_text}\n\n{tool_instructions}", input=input_text,
+                tool_instructions = (load_prompt('worker-tool-instructions-835-1'))
+        combined_prompt = compose_prompts([load_prompt('execution-base'), instruction_text, tool_instructions])
+        request = ModelRequest(instructions=combined_prompt.text, input=input_text,
                                context=request_context,
                                tools=schemas,
                                request_id=request_id, on_delta=on_delta)
@@ -863,6 +900,8 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                                "prompt_version": prompt.version if prompt else "unversioned",
                                "prompt_template_sha256": prompt.template_sha256 if prompt else sha256_text(instruction_text),
                                "prompt_rendered_sha256": prompt.rendered_sha256 if prompt else sha256_text(instruction_text),
+                               "prompt_components": list(combined_prompt.components),
+                               "combined_prompt_sha256": combined_prompt.rendered_sha256,
                                "runtime_context_sha256": sha256_text(json.dumps(request_context, ensure_ascii=False, sort_keys=True, default=str))},
                               started_at=datetime.utcnow())
             last_transport_error: Exception | None = None
@@ -957,7 +996,7 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                 raise RuntimeError(f"model_protocol_failed:{protocol_error.code}") from protocol_error
             context = {**context, "model_protocol_feedback": {
                 "error": protocol_error.code,
-                "instruction": "上一响应的工具参数无效或被截断。不要原样重试；显著压缩输出，确保工具参数 JSON 完整，并严格遵守指令中的字符上限。",
+                "instruction": load_prompt('worker-tool-instructions-740-3').text,
             }}
             continue
         db.commit()
@@ -979,12 +1018,13 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                 text_without_submit += 1
                 if text_without_submit > MAX_NO_CHANGE_CORRECTIONS:
                     raise RuntimeError('unit_submission_required')
-                if runtime.provider == "deepseek":
-                    # 强制继续时保留无工具响应的思考，满足下一轮带工具请求的续传要求。
+                if runtime.provider == "deepseek" or context.get('repair_session'):
+                    # 强制继续时保留通用助手响应，DeepSeek另外保存其协议要求的思考。
                     entry = {"history_key": history_key, "model_request_id": result.request_id,
                              "assistant_content": result.text,
-                             "reasoning_content": result.raw_response.get("reasoning_content", ""),
                              "result": {"status": "succeeded"}}
+                    if runtime.provider == 'deepseek':
+                        entry['reasoning_content'] = result.raw_response.get('reasoning_content', '')
                     if context.get('repair_session'):
                         # 普通文本也保留思考，但不能依赖旧单元的文件清单。
                         entry['repair_versions_before'] = tools.self_test_versions()
@@ -995,7 +1035,7 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                     history.append(entry)
                     checkpoint_entries.append(entry)
                     save_checkpoint(run, checkpoint_entries)
-                context = {**context, 'submission_feedback':'必须调用 submit_unit_for_test，普通结束文本不代表提交。'}
+                context = {**context, 'submission_feedback': load_prompt('worker-extra-1757-3').text}
                 continue
             return result.text
         if context.get('repair_session'):
@@ -1007,6 +1047,9 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
         for index, action in enumerate(result.actions, start=run.last_completed_action_index + 1):
             entry = {"history_key": history_key, "model_request_id": result.request_id,
                      "action": action.__dict__}
+            if context.get('repair_session'):
+                # 通用助手内容与工具意图同批保存，恢复时仍能还原原始消息顺序。
+                entry['assistant_content'] = result.text or None
             if runtime.provider == "deepseek":
                 # 把本轮真实思考与工具调用共同持久化，恢复后按原内容续传。
                 entry["reasoning_content"] = result.raw_response.get("reasoning_content", "")
@@ -1027,7 +1070,7 @@ def model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | P
                                     >= MAX_REPAIR_ACTIONS_WITHOUT_WRITE)
             # 阻止连续重复动作和返修中无写入循环。
             invalid_submit = ((context.get('require_unit_submission') or context.get('repair_session'))
-                              and action.tool_name in {'submit_unit_for_test', 'request_decision'}
+                              and action.tool_name in {'submit_unit_for_test', 'verify_and_submit', 'request_decision'}
                               and action is not result.actions[-1])
             duplicate_read = duplicate_read_error(action, history, request_context, tools)
             if context.get('repair_session') and action.tool_name == 'read' and not duplicate_read:
@@ -1376,7 +1419,7 @@ def plan_bug_action(db: Session, task: Task, run: StepRun, tools: ToolRuntime) -
         # Planner 只提出行动和证据目标，不接触工具；非法决定最多纠正一次。
         response = model_tool_loop(
             db, task, run,
-            """你是现有产品变更的 Next Action Planner。根据已确认变更、最近真实结果及调查证据，从 allowed_actions 中选择下一行动。input 保存最初验收反馈，当前任务与证据适用性看 execution_state、current_evidence；不要把最初缺陷自动当作当前版本仍失败。优先依据当前门禁和 suggested_action 推进，需要具体新证据时才 inspect。inspect 的 path 必须在 remaining_files 中；inspection_refs.available_for_inspect=true 时程序恢复已存 Trace 正文，不重新读取该文件。当前 Run 已提供过的同版本正文不可再次 inspect。不能跳过程序的测试、启动、浏览器和人工验收门径。只返回 JSON：action、path、reason、evidence_refs、clarifying_question；clarify 必须给出一个具体问题；其他行动的 path 为 null。protocol_error.errors 给出拒绝字段和原因，纠错必须处理这些原因。""",
+            load_prompt('bug-action-planner'),
             triage["user_feedback"], context, tools, tool_schemas=[],
             history_key=f"bug_planner_{event_id}_{run.id}_{attempt}", runtime_step=Step.product_docs)
         try:
@@ -1479,16 +1522,7 @@ def handle_product_docs(db: Session, task: Task, run: StepRun, tools: ToolRuntim
                    "acceptance_triage": acceptance_triage}
         # 让模型依据现有证据作出受限的产品阶段动作判断。
         decision = "READY" if product_feedback_is_decided(current_product, acceptance_triage) else model_tool_loop(db, task, run,
-                        """你只负责产品门径判断，本次没有任何工具，绝对不能生成或写入 Draft。
-判断完整问答历史中是否仍存在会改变核心功能范围、主要交互形态，或导致验收结果无法判定的未决产品问题。
-如果存在，第一行必须是 BLOCKED，随后列出最多三个需要用户回答的问题。每个编号只能包含一个决策，不得用“另外”“以及”“是否还需要”等方式在一个编号中打包多个子问题。
-主输入方式、用户如何触发核心动作、单次还是连续操作，属于主要交互，用户未明确时必须提问，绝对不能默认。例如计算器使用两个输入框还是按钮键盘、一次二元运算还是结果可连续参与运算，必须由用户决定。
-只有不改变控件、状态转换和核心行为的细节，例如布局和视觉样式，才不算阻塞问题；可采用最简单默认值，并在后续 Draft 中明确标注为“默认假设”。提示文案仅在不影响验收判定时可以默认。
-当核心功能、主要交互和可执行验收标准足够明确时，必须只返回一个单词 READY，不得为了补齐所有产品细节继续提问。
-产品名称、品类惯例和你的常识都不代表用户已经授权具体功能。不得因为用户说“计算器”“待办清单”等产品名称，就自行假定运算类型、输入方式、按钮、清除、历史、数据保存、输出格式或异常行为。
-本轮已验证的明确验收反馈优先于旧版产品文档；旧文档与反馈冲突，不代表反馈仍需用户确认。只有反馈存在两种实质不同的实现解释且用户未选择时，才必须提问。
-只有核心范围、主要交互或验收判定存在多种实质不同方案且用户没有明确选择时，才必须提问。
-不得询问或重新决定系统固定事项。""",
+                        load_prompt('product-gate'),
                         primary_product_input, context, tools, tool_schemas=[], history_key="product_gate")
         if decision.strip() != "READY":
             if not decision.strip():
@@ -1504,9 +1538,7 @@ def handle_product_docs(db: Session, task: Task, run: StepRun, tools: ToolRuntim
             return
         # 门径通过后才生成 Draft，文件不存在时恢复仍可接着执行。
         model_tool_loop(db, task, run,
-                        f"""门径判断已确认无阻塞问题。根据用户明确需求、回答和系统固定边界生成产品文档，只写入 {target}，write 必须使用 overwrite=false。
-文档必须说明要做什么、为什么、怎么算成功。不得包含“待确认”“尚未确定”、TBD 或任何留给后续决定的产品问题。
-Draft 以用户明确需求、用户回答、验收分类结论和系统固定边界为准；若 acceptance_triage 标记 requirement_change，必须修改被用户反馈推翻的旧行为，不得原样保留冲突的旧约束。不得把模型推测写成“用户明确要求”。默认假设不得增加用户未确认的控件、输入方式、触发动作、连续操作、历史、持久化或其他状态行为。只有布局、视觉样式等不改变功能行为的必要细节可采用最简单默认值，且必须集中放在“默认假设”章节。""",
+                        load_prompt('product-draft-author', {'target': target}),
                         primary_product_input, context, tools,
                         stop_when=lambda: (workspace_for(task) / target).is_file(),
                         tool_schemas=[schema for schema in TOOL_SCHEMAS if schema["function"]["name"] == "write"],
@@ -1519,8 +1551,7 @@ Draft 以用户明确需求、用户回答、验收分类结论和系统固定�
     if not (workspace_for(task) / review_target).is_file():
         # 独立 Reviewer 对照用户原文与旧正式需求评审 Draft。
         model_tool_loop(db, task, run,
-                        f"""你是独立 Product Reviewer，不是 Draft 作者。对照全部用户消息、上一版正式需求和本轮 Draft 进行评审，只写入 {review_target}，write 必须使用 overwrite=false。
-评审报告必须依次包含“阻塞问题”“普通问题”“建议”三个章节，没有内容的章节明确写“无”。阻塞问题包括遗漏或曲解用户明确要求、与用户要求或正式边界冲突、导致验收无法判定的问题。若 acceptance_triage 标记 requirement_change，必须检查 Draft 是否仍保留了被本轮反馈推翻的旧约束；保留即为阻塞问题。普通问题是不阻塞当前目标但应澄清或修正的问题。建议不得擅自扩大产品范围。""",
+                        load_prompt('product-draft-reviewer', {'review_target': review_target}),
                         draft_text,
                         {"unpaired_user_requests": unpaired_requests if current_product else [initial] + unpaired_requests, "previous_product": previous_text,
                          "question_answer_turns": conversation_turns,
@@ -1534,8 +1565,7 @@ Draft 以用户明确需求、用户回答、验收分类结论和系统固定�
     if not (workspace_for(task) / candidate_target).is_file():
         # 作者根据独立评审生成供用户审批的 Candidate。
         model_tool_loop(db, task, run,
-                        f"""你是 Product Author。根据 Draft、独立 Review、全部用户消息和上一版正式需求生成供用户审批的候选版，只写入 {candidate_target}，write 必须使用 overwrite=false。
-必须解决 Review 中的阻塞问题；普通问题在不替用户做关键决定的前提下修正；建议只有不扩大范围且有明确依据时才采纳。不得把模型推测写成用户明确要求。""",
+                        load_prompt('product-candidate-author', {'candidate_target': candidate_target}),
                         draft_text,
                         {"review": review_text, "unpaired_user_requests": unpaired_requests if current_product else [initial] + unpaired_requests,
                          "question_answer_turns": conversation_turns,
@@ -1552,9 +1582,7 @@ Draft 以用户明确需求、用户回答、验收分类结论和系统固定�
         # 独立检查候选产品文档是否逐条覆盖验收行为变更。
         coverage_text = model_tool_loop(
             db, task, run,
-            """你是独立 Product Change Coverage Validator，只核对候选需求是否正确吸收变更契约，不写文件。
-逐条比较 current_behavior、expected_behavior、acceptance_examples 与候选文档。若候选仍保留被推翻的旧行为、把现状当期望、遗漏期望行为或没有可执行验收标准，则 covered=false。
-只返回 JSON：items 数组，每项包含 index（从 1 开始）、covered、reason；all_covered 仅在所有条目 covered=true 时为 true。不要返回 Markdown。""",
+            load_prompt('product-change-coverage'),
             candidate_text, {"changes": changes, "previous_product": previous_text,
                              "unpaired_user_requests": unpaired_requests if current_product else [initial] + unpaired_requests,
                              "question_answer_turns": conversation_turns}, tools, tool_schemas=[],
@@ -1635,7 +1663,7 @@ def plan_initial_design_action(db: Session, task: Task, run: StepRun, tools: Too
             # Planner 只返回建议，不写文件；非法输出最多纠正一次。
             response = model_tool_loop(
                 db, task, run,
-                """你是新任务设计门径的 Next Action Planner。docs/product.md 已由程序在用户批准后正式化，正文即使残留「候选版」标题也不改变审批状态。Worker 的本地 HTTP 服务仅用于软件预览和健康检查，与生成产品不发起外部网络请求不冲突；这不是用户待决的产品设计。只依据已经批准的产品需求、现有正式设计和固定项目约束判断编码前还有没有必须写进独立设计文档的决定。不能按需求字数或软件名称判断。若模块职责、接口、数据、状态、关键流程或失败处理在正式需求和固定约束中已明确且无需额外取舍，可跳过不必要的设计文档；若某份设计承载必要取舍，则选对应更新行动。用户未确认的关键业务规则不能由你猜测，证据不足只提出一个澄清问题。只返回 JSON：action、reason、evidence（引用正式需求的具体句子，字符串数组）、unresolved_decisions（未解决的关键决定数组）、confidence（0 到 1）、clarifying_question。action 必须在 allowed_actions 中。跳过设计时 evidence 必须非空，unresolved_decisions 必须为空。不得调用工具或改文件。""",
+                load_prompt('initial-design-planner'),
                 product, {**context, "protocol_error": context.get("protocol_error")}, tools,
                 tool_schemas=[], history_key=f"initial_{phase}_plan_{run.attempt}_{attempt}")
             try:
@@ -1751,11 +1779,10 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     source_text = (root / source).read_text(encoding="utf-8")
     confirmed_answers = design_clarifications(db, task)
     answer_context = {"confirmed_design_answers": confirmed_answers}
-    answer_instruction = ("审批后的 confirmed_design_answers 是用户最新明确决定，优先于上游文档残留的待确认旧表述；"
-                          "必须吸收这些决定，不得继续写成待确认。" if confirmed_answers else "")
+    answer_instruction = (load_prompt('worker-answer-instruction-1754-1') if confirmed_answers else "")
     label = "架构设计" if kind == "architecture" else "Dev Design"
-    extra = ("明确接口、数据、状态、流程和失败处理。" if kind == "dev_design" else
-             "按职责划分模块，定义依赖、数据所有权、公共接口与跨模块流程；较大模块按可独立测试的功能拆分。采用最少且完整可验收的单元，测试、文档和验证脚本归属相应功能，不单独拆成业务模块或功能。测试固定 Node 内置框架，真实浏览器固定 Python Playwright 且只连接系统提供 URL；不得新增 npm Playwright 或自行启动验证服务。保持精简，函数内部详细设计留给逐单元 Dev Design。")
+    extra = (load_prompt('worker-extra-1757-1') if kind == 'dev_design' else
+             load_prompt('worker-extra-1757-2'))
     if not revision and (root / target).is_file():
         # 首版正式文件已经存在时补存版本快照并跳过重复生成。
         if not (root / formal_version).is_file():
@@ -1804,9 +1831,7 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
         allowed_actions = [revise_action, "clarify"] if required_update else [revise_action, reuse_action, "clarify"]
         decision_text = model_tool_loop(
             db, task, run,
-            f"""你是已有产品设计阶段的 Next Action Planner，根据上游正式文档差异决定下一行动，不写文件。
-只返回 JSON：action 必须属于 allowed_actions；reason；affected_sections；preserved_sections；confidence（0 到 1）；clarifying_question。
-选择 {revise_action} 表示现有{label}受影响，应以旧正式版本为基线局部修订。选择 {reuse_action} 表示有证据确认全部上游变化不影响现有{label}，程序保存复用血缘后进入下游；证据不足选择 clarify。""",
+            load_prompt('design-transition-planner', {'revise_action': revise_action, 'label': label, 'reuse_action': reuse_action}),
             upstream_diff,
             {"previous_upstream": previous_upstream_text, "current_upstream": source_text,
              "input_source": "upstream_diff", "previous_artifact": previous_text,
@@ -1851,15 +1876,12 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     if not (root / draft).is_file():
         # 修订以旧正式文档为基线；首次生成直接使用当前正式上游。
         if revision:
-            instructions = (f"以旧{label}为唯一基线，根据上游差异和影响判断进行局部修订，只写入 {draft}，"
-                            f"write 必须使用 overwrite=false。不得重写 preserved_sections，不得引入无上游依据的变化。"
-                            f"{extra}{answer_instruction}")
+            instructions = (load_prompt('worker-instructions-1854-1', {'label': label, 'draft': draft, 'extra': extra, 'answer_instruction': answer_instruction}))
             input_text = previous_text
             context = {"current_upstream": source_text, "upstream_diff": upstream_diff,
                        "transition_decision": transition, **answer_context}
         else:
-            instructions = (f"根据正式上游文档生成{label}候选，只写入 {draft}；该文件不存在，必须使用 overwrite=false。"
-                            f"{extra}{answer_instruction}")
+            instructions = (load_prompt('worker-instructions-1861-1', {'label': label, 'draft': draft, 'extra': extra, 'answer_instruction': answer_instruction}))
             input_text = source_text
             context = answer_context
         model_tool_loop(db, task, run,
@@ -1873,8 +1895,7 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     if not (root / review).is_file():
         # 独立评审保留章节和旧约束，避免增量修订引入无依据设计。
         model_tool_loop(db, task, run,
-                        f"你是独立 reviewer。评审候选，区分阻塞问题、普通问题和建议，只写入 {review}；"
-                        "检查差异是否完整覆盖、preserved_sections 是否被意外修改、旧约束是否丢失以及是否引入无依据设计；write 必须使用 overwrite=false。",
+                        load_prompt('design-candidate-reviewer', {'review': review}),
                         draft_text, {"upstream": source_text, "previous_artifact": previous_text,
                                      "upstream_diff": upstream_diff, "transition_decision": transition,
                                      **answer_context}, tools,
@@ -1887,8 +1908,7 @@ def handle_reviewed_doc(db: Session, task: Task, run: StepRun, tools: ToolRuntim
     if not (root / formal_version).is_file():
         # 把评审意见并入正式版本，再同步当前有效文档。
         model_tool_loop(db, task, run,
-                        f"根据候选与独立评审生成正式{label}，只写入 {formal_version}，不得改变上游需求；"
-                        f"write 必须使用 overwrite=false。{answer_instruction}",
+                        load_prompt('design-final-author', {'label': label, 'formal_version': formal_version, 'answer_instruction': answer_instruction}),
                         draft_text, {"review": review_text, "upstream": source_text,
                                      "previous_artifact": previous_text,
                                      "transition_decision": transition, **answer_context}, tools,
@@ -2023,24 +2043,13 @@ def handle_develop(db: Session, task: Task, run: StepRun, tools: ToolRuntime):
         run.output_path = "product/implementation.md"
         finish_step(db, task, run, Step.test)
         return
-    instructions = """实现原生 HTML、CSS、JavaScript 软件，服从正式设计的模块边界。先在 text 中给出简短计划，再用 write 创建或覆盖文件。
-write/read 的路径相对任务工作区，不是 product 工作目录。固定入口为 product/index.html、product/verify_product.py、product/implementation.md；JS、CSS 和其他文件路径按正式设计生成，HTML 本地引用必须指向实际产品文件。不要求根目录 app.js 或 styles.css。
-不存在的文件必须使用 overwrite=false；只有 existing_product_files 明确列出的已有文件才使用 overwrite=true。不要把文件写到工作区根目录。
-优先完成设计规定的全部实现文件、三个固定入口及测试文件，再使用 exec 调试；不要在文件未齐时反复运行测试或临时诊断命令。正式测试和失败返修由后续 test Step 负责。
-Node 内置测试文件命名为 *.test.js、*.test.cjs 或 *.test.mjs，可放在子目录；verify_product.py 使用 Python Playwright 验证已批准需求中的核心行为、异常输入和错误后恢复。
-verify_product.py 必须读取命令行第一个参数作为访问地址，直接连接系统已启动的产品服务；不得自行启动 HTTP 服务或绑定固定端口。
-可使用 exec 执行 node --test 自动发现测试。不得引入生成产品依赖。全部设计文件完成后立即结束，不得仅因入口文件存在就宣称完成。"""
+    instructions = load_prompt('worker-instructions-2026-1')
     if not design_path.is_file():
-        instructions += "\n此任务经 Planner 确认无需独立 Dev Design；按 context 的正式产品需求和固定约束实施，不补写虚假的设计文档，也不擅自增加产品行为。"
+        instructions += load_prompt('worker-instructions-2034-1')
     if is_repair:
-        instructions += """
-这是失败后的返修，不是首次生成。正式实现依据、失败来源、对应的完整失败报告和当前产品文件已放在 context 或最近工具交互中；优先使用已有内容，需要原始历史证据时用查询工具，需要最新文件时可用 read。逐项判断失败来自实现、测试还是两者。测试期望与已批准需求冲突时修测试，实现偏离时修实现。
-必须优先解决 failure_source_step 指向的失败：若为 verify_product，重点检查 Playwright 输出、verify_product.py 是否使用系统传入的 HTTP URL，以及浏览器脚本是否真实加载；不得只运行 Node 测试后宣称完成。
-至少使用 overwrite=true 实际修改一个 existing_product_files 中的文件。可以用 exec 运行 Node 测试，但不要查找、安装或尝试切换 Python／Playwright 环境；系统会在你结束本轮后使用受控 Python 自动复跑原失败验证。完成必要写入和 Node 测试后立即结束，不得因为入口文件已经存在就宣称完成。"""
+        instructions += load_prompt('worker-instructions-2036-1')
     elif upstream_changed or non_bug_change:
-        instructions += """
-这是已验收产品的增量开发。必须比较变更后的正式产品需求、previous_product 与当前代码；若 Dev Design 变化，再比较 previous_dev_design 与当前 dev_design。以现有代码为基线，只修改受差异影响的代码和测试，不得推倒重写无关部分。
-至少使用 overwrite=true 修改一个 existing_product_files 中的文件，并用 exec 运行更新后的相关测试。不得因为入口文件已经存在就宣称完成。"""
+        instructions += load_prompt('worker-instructions-2041-1')
         safe_record_trace(db, task, run, "transition_decision", "succeeded", "开发影响判断",
                           "revise", {"previous_lineage": lineage,
                                      "current_dev_design_hash": dev_design_hash},
@@ -2497,7 +2506,7 @@ def plan_acceptance_action(db: Session, task: Task, run: StepRun, feedback: str,
         # Planner 不接触工具；所有正式文档和已读取证据在下一轮规划中继续可见。
         response = model_tool_loop(
             db, task, run,
-            """你是已有产品验收反馈的 Next Action Planner。用户描述只是线索；对照实际存在的正式文档、明确保存的设计跳过依据和已调查证据，直接决定下一行动。被跳过的文档不是空白正式设计；若新问题表明必须补设计，可选择对应更新。若要判断代码实现缺陷，先 inspect 相关产品代码；证据不足可继续 inspect 或 clarify。只返回一个 JSON 对象：action、path、reason、evidence、changes、confidence、clarifying_question。inspect 是返回给程序的 JSON 行动，不是真实工具调用；例如 {"action":"inspect","path":"product/app.js","reason":"核对页面操作","evidence":[],"changes":[],"confidence":0.8,"clarifying_question":null}。不要输出 tool_call、tool_calls、Markdown 或代码块。action 必须在 allowed_actions 中；inspect 的 path 必须在 remaining_files 中，其他行动的 path 为 null。编号反馈逐条解释，选择所有条目中最早失效的行动。改变或新增产品可见行为选 update_requirement；需求不变但架构决策缺失或冲突选 update_architecture；架构成立但实现细节设计必须补充或冲突选 update_dev_design；正式需求和现有设计或跳过依据均支持期望行为而代码不符才选 modify_code。不能只凭“缺陷”一词认定代码问题，不能把用户描述的现状当期望。update_requirement 的 changes 每项须含 current_behavior、expected_behavior 和非空 acceptance_examples；clarify 须只提出一个具体问题。不得写文件或执行命令。""",
+            load_prompt('acceptance-action-planner'),
             feedback, {"approved_documents": approved_documents, "remaining_files": remaining,
                        "inspection_contract": "inspect 支持 start_line、end_line，默认先读 200 行；证据标注范围与 next_line，禁止重复读已调查范围。",
                        "skipped_design": skipped_design_evidence(task),
@@ -2633,9 +2642,7 @@ def plan_acceptance_feedback(db: Session, task: Task, event: Event, feedback: st
         # 再次核对行为变更契约与分类是否一致。
         consistency_text = model_tool_loop(
         db, task, run,
-        """你是独立 Acceptance Interpretation Consistency Validator，不重新解决产品问题，也不修改文件。
-检查初步分类是否忠实且自洽：用户是在“报告问题”，每个编号项都必须解释；current_behavior 必须是用户观察到的现状，expected_behavior 必须是用户希望改变后的行为。若某项被解释出的 expected_behavior 与现有正式需求相同，但初步分类又无法说明实际实现如何违反它，该解释通常把缺陷描述反当成期望；若原句方向存在两种合理解释，也必须判为不一致并要求澄清。总体 classification 必须采用所有条目中最早失效的阶段。
-只返回 JSON：consistent 为布尔值；contradictions 为字符串数组；clarifying_question 在不一致时只问一个能消除行为方向歧义的问题，一致时为 null。""",
+        load_prompt('acceptance-consistency-validator'),
         feedback, {"approved_documents": inputs, "skipped_design": skips,
                    "inspected_files": inspected, "initial_triage": result},
         ToolRuntime(root), tool_schemas=[],

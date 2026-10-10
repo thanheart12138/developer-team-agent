@@ -1,1 +1,1031 @@
-{"prompts":{"acceptance-correction-reviewer":{"active":"v1","sha256":"e95ab79af4a1b330b4f1d963fd56ac782b593f4b70b9043b8e3490b3031ecf69"},"acceptance-corrector":{"active":"v1","sha256":"1ae99af7c9a7e8168d1cea627a737b55145c552b59e203b0f7cc2bff52ed78fb"},"acceptance-coverage-reviewer":{"active":"v1","sha256":"4f9d6d36e3f23596c10db3eb4b575652912c6004754a8a0e31af16ae67165a7a"},"acceptance-extractor":{"active":"v2","sha256":"35ad408cb2744a3450ffdadf1ccc2bbc2811abba574e272eb601e5d7569df898"},"acceptance-reviewer":{"active":"v2","sha256":"d83dc1996a44f4994f370fa1b360bfc10f75c61e655ef34d9f907aab51f4ae7d"},"architecture-scaffolder":{"active":"v5","sha256":"36593acf8e4ccaf3b809e2817b56718f4feceb8b07a2d735fbd603a0f7cdbf70"},"design-author":{"active":"v1","sha256":"9dc8df6614c3ffce226f311beda0da8111d9e698d6cb7387775bc54f9906da71"},"design-reviewer":{"active":"v1","sha256":"c3c9aa85bb577e99179660915639bc3c67427f6c02d89da8c0cbc0642cea8403"},"integration-repair-diagnoser":{"active":"v1","sha256":"2ac70c720ba0bd7381e0080db3b95c41f31d4e6c98af6e2ad47a9d3aca931ab2"},"repair-objective-reviewer":{"active":"v1","sha256":"a6acefb92be17dbedd43759d8a1015666f7dd46770b0debaeaff6a5ce2f1fb09"},"slice-developer":{"active":"v13","sha256":"6ad8d0927297122dcdaa80e9c5c850f7896a3f7f1adaf7015235b654ee4d57ef"},"slice-planner":{"active":"v6","sha256":"018568ecb4afc0e88707c670ecdc74b99705cb2fc6ba6e602aeed8a10569b6b2"},"unit-developer":{"active":"v1","sha256":"a4feab5adebac0b545b9b215b53556b552c4b16e149be26ed92918a3c9f88102"},"unit-planner":{"active":"v1","sha256":"fe158c13b3837096d0bb4c172512fe1cd06e9d405dcb425e79f35b37242e3ec3"}}}
+{
+  "prompts": {
+    "acceptance-correction-reviewer": {
+      "active": "v1",
+      "sha256": "e95ab79af4a1b330b4f1d963fd56ac782b593f4b70b9043b8e3490b3031ecf69",
+      "versions": {
+        "v1": "e95ab79af4a1b330b4f1d963fd56ac782b593f4b70b9043b8e3490b3031ecf69"
+      },
+      "purpose": "你独立复查内部行为标准的一次局部修正，只返回 JSON 对象 {\"complete\":true或false,\"issues\":[{\"source_quote\":\"产品原文连续片段\",\"problem\":\"仍未解决或新引入的具体问题\"}]}，不得写文件或调用工具。"
+    },
+    "acceptance-corrector": {
+      "active": "v1",
+      "sha256": "1ae99af7c9a7e8168d1cea627a737b55145c552b59e203b0f7cc2bff52ed78fb",
+      "versions": {
+        "v1": "1ae99af7c9a7e8168d1cea627a737b55145c552b59e203b0f7cc2bff52ed78fb"
+      },
+      "purpose": "你只修正内部行为标准中已指出的问题，不重新生成完整清单。只返回 JSON 对象：{\"add\":[{\"source_quote\":\"产品原文连续片段\",\"action\":\"单个用户动作或条件\",\"observable_result\":\"可观察结果\"}],\"replace\":[{\"i"
+    },
+    "acceptance-coverage-reviewer": {
+      "active": "v1",
+      "sha256": "4f9d6d36e3f23596c10db3eb4b575652912c6004754a8a0e31af16ae67165a7a",
+      "versions": {
+        "v1": "4f9d6d36e3f23596c10db3eb4b575652912c6004754a8a0e31af16ae67165a7a"
+      },
+      "purpose": "你是切片完成前的独立覆盖审查者。输入包含内部行为验收标准、已通过切片的验收条件和真实测试结果，以及当前浏览器验证脚本。只返回 JSON 对象 {\"complete\":true或false,\"issues\":[{\"acceptance_id\":\"标准条目 ID\",\"problem\""
+    },
+    "acceptance-extractor": {
+      "active": "v2",
+      "sha256": "35ad408cb2744a3450ffdadf1ccc2bbc2811abba574e272eb601e5d7569df898",
+      "versions": {
+        "v2": "35ad408cb2744a3450ffdadf1ccc2bbc2811abba574e272eb601e5d7569df898",
+        "v1": "d47741ec5febf864856ec599d19eea89a50eff8a57a7395ddbcfdf2982abeb3a"
+      },
+      "purpose": "你从已批准的产品文档提取系统内部的「用户可观察行为」标准，只返回 JSON 对象 {\"items\":[{\"source_quote\":\"产品原文中的连续片段\",\"action\":\"一个用户动作或触发条件\",\"observable_result\":\"用户能观察到的结果\"}]}，不得"
+    },
+    "acceptance-reviewer": {
+      "active": "v2",
+      "sha256": "d83dc1996a44f4994f370fa1b360bfc10f75c61e655ef34d9f907aab51f4ae7d",
+      "versions": {
+        "v2": "d83dc1996a44f4994f370fa1b360bfc10f75c61e655ef34d9f907aab51f4ae7d",
+        "v1": "78d22292ba3d74e5afeb2fde64fa3b4277b65a3c084ad663a5b39736ea8db313"
+      },
+      "purpose": "你是系统内部「用户可观察行为」标准的独立审查者。对照完整已批准产品文档和候选条目，只检查生成软件的功能、实际使用成功场景及影响操作结果的边界行为是否遗漏、合并或曲解。只返回 JSON 对象 {\"complete\":true或false,\"issues\":[{\"source_quo"
+    },
+    "architecture-scaffolder": {
+      "active": "v5",
+      "sha256": "36593acf8e4ccaf3b809e2817b56718f4feceb8b07a2d735fbd603a0f7cdbf70",
+      "versions": {
+        "v3": "561e0c2de7da860f7a0d6dbeaa040ef3cf38b44f4f368d8c3e86b7826da41ecb",
+        "v2": "bc0c81b007241bcb9cbe3c8b3593a765d31489a57379ea00a69d9454596565b1",
+        "v5": "36593acf8e4ccaf3b809e2817b56718f4feceb8b07a2d735fbd603a0f7cdbf70",
+        "v1": "7ac5db54883bfb85fa6423e0328d28ddd3b355a938157a76c78c14ec4b203461",
+        "v4": "1ccfe618c13955cb8ce359b7e8a9ab5b25a5dbcfd95a93761d85ff74f15d50e1"
+      },
+      "purpose": "你是架构代码骨架生成器，只返回一个 JSON 对象，不调用工具，不输出 Markdown 围栏。"
+    },
+    "design-author": {
+      "active": "v1",
+      "sha256": "9dc8df6614c3ffce226f311beda0da8111d9e698d6cb7387775bc54f9906da71",
+      "versions": {
+        "v2": "f2b416d792eb77cf90ea90eb776000af278107a9bca930771466586891721dc8",
+        "v1": "9dc8df6614c3ffce226f311beda0da8111d9e698d6cb7387775bc54f9906da71"
+      },
+      "purpose": "生成精简且可实施的{{label}}，只写入 {{draft}}，overwrite=false。正文硬上限 5000 个字符；只保留实施所需契约和验收映射，不写背景复述。不要拼接所有模块设计。接口、数据、状态、流程、失败处理及验收必须明确；引用共享契约，不重定义其他模块接口。有"
+    },
+    "design-reviewer": {
+      "active": "v1",
+      "sha256": "c3c9aa85bb577e99179660915639bc3c67427f6c02d89da8c0cbc0642cea8403",
+      "versions": {
+        "v2": "7e986e3bdcebde1feb1bd631a33cb3f6209bb3bbb62dc7600e7bd3905851cd5e",
+        "v1": "c3c9aa85bb577e99179660915639bc3c67427f6c02d89da8c0cbc0642cea8403"
+      },
+      "purpose": "你是独立设计评审，只返回简短完整 JSON：action（ready|revise|clarify）、issues（字符串数组）、question。核对正式需求、当前单元验收和共享交互契约，检查模块依赖、数据所有权、接口输入输出、状态、关键流程、失败策略和测试是否足以实施。仅当前"
+    },
+    "integration-repair-diagnoser": {
+      "active": "v1",
+      "sha256": "2ac70c720ba0bd7381e0080db3b95c41f31d4e6c98af6e2ad47a9d3aca931ab2",
+      "versions": {
+        "v1": "2ac70c720ba0bd7381e0080db3b95c41f31d4e6c98af6e2ad47a9d3aca931ab2"
+      },
+      "purpose": "你是只读集成失败定位器，不写文件，不改变设计或测试期望。只能返回 JSON。结合失败输出、当前代码、已确认需求和契约及文件所有权，判断实现错误、测试脚本错误或契约问题。堆栈文件是线索，不必然是根因；测试错误须对照已确认需求与真实输入，不能用修改期望迎合错误实现。返回 catego"
+    },
+    "repair-objective-reviewer": {
+      "active": "v1",
+      "sha256": "a6acefb92be17dbedd43759d8a1015666f7dd46770b0debaeaff6a5ce2f1fb09",
+      "versions": {
+        "v1": "a6acefb92be17dbedd43759d8a1015666f7dd46770b0debaeaff6a5ce2f1fb09"
+      },
+      "purpose": "你是原始验收缺陷的独立验证审查者。只返回 JSON：{\"results\":[{\"id\":\"目标 ID\",\"covered\":true或false,\"operation_quote\":\"实际浏览器脚本中的连续原文\",\"assertion_quote\":\"实际浏览器脚本中的连续原文\""
+    },
+    "slice-developer": {
+      "active": "v13",
+      "sha256": "6ad8d0927297122dcdaa80e9c5c850f7896a3f7f1adaf7015235b654ee4d57ef",
+      "versions": {
+        "v9": "564de47ea74c9de7917acced53ab6d90d32d50bfff8c210aae05905857018836",
+        "v8": "5bb28a34e54eedc1514a8c2b47c9c1470bf4c1d1e21dd71d8b1d02ad7679caaf",
+        "v3": "8020060f5d2cd2708ede4c814f622b34d3d9a5d3a1c4fe552b6f6838c1c0a568",
+        "v7": "0559891ed46595508f83db1431725c5a8fa2680c4f51d3533ebffc500eb3667e",
+        "v13": "6ad8d0927297122dcdaa80e9c5c850f7896a3f7f1adaf7015235b654ee4d57ef",
+        "v6": "04a0e64accf7087ce1a19d570d039cf61eed3f483e6f8371c1678c911d02c486",
+        "v12": "8fe480e4df9378d605f8c6231963847fa1df8e79232f4229fac8aca54941cbfb",
+        "v2": "5d211e6a8e822b00c9e4643334edbaf4a1f7c18a02345982d06eb74202875488",
+        "v5": "b674df143819794379ac7128427232f3dda725c1a761c40fe6d06db3c9f53517",
+        "v11": "0852a48e5644c7aa7ca03ecaf69ab1e38147e73695c4dd90ddd39cb76ee82ed5",
+        "v1": "db2dc3552f94876e7fc5aeb41ed958195231766e9b78ae5cfc2bbe84d9e3ccb3",
+        "v4": "da8861fd76906338ea1194688d3dcee10e1f42b23026b81a230b060f32494923",
+        "v10": "a90bfd0f32a87b53ddb7ee8deb49f448f8be01833b3f3f3ee4bc02c065692a2c"
+      },
+      "purpose": "你负责当前业务切片的开发或返修。存在 repair_task 时只执行「返修」段；否则执行「从零开发」段。以下共同规则始终适用，只使用本次请求开放的工具。"
+    },
+    "slice-planner": {
+      "active": "v6",
+      "sha256": "018568ecb4afc0e88707c670ecdc74b99705cb2fc6ba6e602aeed8a10569b6b2",
+      "versions": {
+        "v3": "c3a3b868761305b82767329fbba78d2480c52b74a7bb9236dea19af092816cf8",
+        "v6": "018568ecb4afc0e88707c670ecdc74b99705cb2fc6ba6e602aeed8a10569b6b2",
+        "v2": "67c6297befedcec730fd022e36d77a5a0681a5f75d8f61b1e4d835cd252647ac",
+        "v5": "c197ec60f5c17ce16ed75dea4b785c5490f5ea59c15d3599a40adf8eb89e48b7",
+        "v1": "80a14128b2519369e41e6212362b1b3608e29c7329e7073b947fe77ad1873b48",
+        "v4": "439a57e6173484db9266c5d2e51be6316e0b542632e5721e9f194a2452d9f298"
+      },
+      "purpose": "你是逐业务切片 Planner，只返回 JSON，不写文档或代码。每次只规划当前下一张可实现、可测试、能产生用户可见业务结果的切片；不要预先拆完整项目。"
+    },
+    "unit-developer": {
+      "active": "v1",
+      "sha256": "a4feab5adebac0b545b9b215b53556b552c4b16e149be26ed92918a3c9f88102",
+      "versions": {
+        "v1": "a4feab5adebac0b545b9b215b53556b552c4b16e149be26ed92918a3c9f88102"
+      },
+      "purpose": "只开发当前模块／功能，按当前 Dev Design 和共享契约实现正常、边界和错误后恢复行为。只能写 owned_files，依赖文件只读；禁止重定义接口或降低测试期望。已有文件 overwrite=true，新文件 false。修改后先调用 run_unit_tests 自测，"
+    },
+    "unit-planner": {
+      "active": "v1",
+      "sha256": "fe158c13b3837096d0bb4c172512fe1cd06e9d405dcb425e79f35b37242e3ec3",
+      "versions": {
+        "v2": "7027f46f0eb59facbfbd2ac988cd5216e846c36e322b0a74be6ec06c1f2a9a8a",
+        "v1": "fe158c13b3837096d0bb4c172512fe1cd06e9d405dcb425e79f35b37242e3ec3"
+      },
+      "purpose": "你是架构开发单元规划器，只返回 JSON，不写代码或完整 Dev Design。"
+    },
+    "execution-base": {
+      "active": "v1",
+      "sha256": "3f9631ec0ed8c993bcd87e2a51f55ef0d04d58d2e61d104626c3477ccb5d4cbe",
+      "versions": {
+        "v1": "3f9631ec0ed8c993bcd87e2a51f55ef0d04d58d2e61d104626c3477ccb5d4cbe"
+      },
+      "purpose": "你是开发团队模拟器中的执行 Agent。严格完成当前 Step，不改变已确认需求、技术栈或流程。",
+      "sources": [
+        "backend/app/runtime/worker.py:65"
+      ]
+    },
+    "worker-tool-instructions-738-1": {
+      "active": "v1",
+      "sha256": "a04e5cf70b9b31bd273bf66df57924c31e4017e34b52f0661bea80e851cd7909",
+      "versions": {
+        "v1": "a04e5cf70b9b31bd273bf66df57924c31e4017e34b52f0661bea80e851cd7909"
+      },
+      "purpose": "每次工具调用用 description 简述目的。当前文件版本以 product_file_manifest 为准；tool_summaries 是当前循环按文件合并的最近读取／写入状态，不是历史流水。current_requested_data 返回本次请求的读取／查询数据，c",
+      "sources": [
+        "backend/app/runtime/worker.py:738"
+      ]
+    },
+    "worker-tool-instructions-740-1": {
+      "active": "v1",
+      "sha256": "b8a62765166ae2d4548f705ad626929766ea133215e8dc3d0cb20a7cf6812b29",
+      "versions": {
+        "v1": "b8a62765166ae2d4548f705ad626929766ea133215e8dc3d0cb20a7cf6812b29"
+      },
+      "purpose": "旧成功不能替代当前证据；development_state.current_version_passed=true表示程序已核对真实自测与当前完整产品版本，独立上下文接力不会使它失效。仍需判断原缺陷和必要修改是否完成，再显式提交。",
+      "sources": [
+        "backend/app/runtime/worker.py:740"
+      ]
+    },
+    "worker-tool-instructions-740-2": {
+      "active": "v1",
+      "sha256": "7094b53d52a2f12fbcbd2740d8ce2b9d498f04fc4e0f6a26443f02212faf0cc6",
+      "versions": {
+        "v1": "7094b53d52a2f12fbcbd2740d8ce2b9d498f04fc4e0f6a26443f02212faf0cc6"
+      },
+      "purpose": "不得把历史执行成功当作当前代码已验证。",
+      "sources": [
+        "backend/app/runtime/worker.py:741"
+      ]
+    },
+    "worker-tool-instructions-740-3": {
+      "active": "v1",
+      "sha256": "3ecc26b1b8238e1673fbf053a33e7bf680c8260256cfd53252f93ab56110bae4",
+      "versions": {
+        "v1": "3ecc26b1b8238e1673fbf053a33e7bf680c8260256cfd53252f93ab56110bae4"
+      },
+      "purpose": "上一响应的工具参数无效或被截断。不要原样重试；显著压缩输出，确保工具参数 JSON 完整，并严格遵守指令中的字符上限。",
+      "sources": [
+        "backend/app/runtime/worker.py:feedback"
+      ]
+    },
+    "worker-tool-instructions-744-1": {
+      "active": "v1",
+      "sha256": "ccd128c098ca22928c76100cf89b342529d86439353544b098578d3196887b95",
+      "versions": {
+        "v1": "ccd128c098ca22928c76100cf89b342529d86439353544b098578d3196887b95"
+      },
+      "purpose": "开发必须先 run_unit_tests 自测，当前版本通过后才 submit_unit_for_test。修改使旧结果过期，应重新自测；unit_self_test 返回真实自测结果，旧 unit_test_feedback/global_failure 是修复依据，不能认定未",
+      "sources": [
+        "backend/app/runtime/worker.py:744"
+      ]
+    },
+    "worker-tool-instructions-745-1": {
+      "active": "v1",
+      "sha256": "6459d92d7a0b72f79e60d78873261f6470f761ebac352f1c7887b992c8fbb17b",
+      "versions": {
+        "v1": "6459d92d7a0b72f79e60d78873261f6470f761ebac352f1c7887b992c8fbb17b"
+      },
+      "purpose": "run_unit_tests 外层 status=succeeded 仅说明工具调用完成，测试是否通过以 output.passed 和内部命令结果为准；passed=false 必须根据真实失败输出修复。没有证据时不得认定结果来自缓存。",
+      "sources": [
+        "backend/app/runtime/worker.py:745"
+      ]
+    },
+    "worker-tool-instructions-748-1": {
+      "active": "v1",
+      "sha256": "ccad1ac123c513687e58b6bcb29e9c2fe1388c4d448fe91ac45045f0695a74b6",
+      "versions": {
+        "v1": "ccad1ac123c513687e58b6bcb29e9c2fe1388c4d448fe91ac45045f0695a74b6"
+      },
+      "purpose": "unit_test_feedback.content_source=read_on_demand 时完整旧报告在 detail_path；目标 historical_evidence_ref 指向完整账本。当前错误以 unit_diagnostic 为准，原始目标原文、期望与复现",
+      "sources": [
+        "backend/app/runtime/worker.py:748"
+      ]
+    },
+    "worker-tool-instructions-751-1": {
+      "active": "v1",
+      "sha256": "3c9b33e617fc5d1893a0346a91c4d95d3c0c930844630b5220ac8f8cca3b1f63",
+      "versions": {
+        "v1": "3c9b33e617fc5d1893a0346a91c4d95d3c0c930844630b5220ac8f8cca3b1f63"
+      },
+      "purpose": "当前单元不自动附带所有产品文件全文。需要正文时按清单 read 必要文件；仅本次请求仍实际含相同版本和范围的正文时不要重复读，旧内容已省略或版本变化时允许补读。文件摘要与哈希不是正文。",
+      "sources": [
+        "backend/app/runtime/worker.py:751"
+      ]
+    },
+    "worker-tool-instructions-752-1": {
+      "active": "v1",
+      "sha256": "b32bf7d641da552ac0b187935b7bb3e1613d0a3aba4ed572a3df0a1c0e3261c7",
+      "versions": {
+        "v1": "b32bf7d641da552ac0b187935b7bb3e1613d0a3aba4ed572a3df0a1c0e3261c7"
+      },
+      "purpose": "verification_execution_contract 是当前系统验证职责，优先于旧卡的服务托管描述。允许在权限范围内修正冲突的服务／日志测试，必须保留批准业务行为和真实操作断言。",
+      "sources": [
+        "backend/app/runtime/worker.py:752"
+      ]
+    },
+    "worker-tool-instructions-755-1": {
+      "active": "v1",
+      "sha256": "1753c514cfe48c4de4d02a275f404c31492753472cb8aad05bc2d2eb1fead05f",
+      "versions": {
+        "v1": "1753c514cfe48c4de4d02a275f404c31492753472cb8aad05bc2d2eb1fead05f"
+      },
+      "purpose": "【交接提醒】当前版本自测已通过，本轮只能调用 submit_unit_for_test，不要读取、诊断或重新测试。",
+      "sources": [
+        "backend/app/runtime/worker.py:755"
+      ]
+    },
+    "worker-tool-instructions-755-2": {
+      "active": "v1",
+      "sha256": "03561f6a87e458b4da6186833b58b3d798d86bd6522061e56eedd64b6bc05e0b",
+      "versions": {
+        "v1": "03561f6a87e458b4da6186833b58b3d798d86bd6522061e56eedd64b6bc05e0b"
+      },
+      "purpose": "【无进展提醒】已连续多轮没有文件版本变化，不要再次读取已提供的文件。缺交付文件则补齐；无需修改时先 run_unit_tests，当前版本通过后立即 submit_unit_for_test。确有设计阻塞只输出 BLOCKED: 和具体问题。剩余无进展额度耗尽将停止，不会自动结束",
+      "sources": [
+        "backend/app/runtime/worker.py:757"
+      ]
+    },
+    "worker-tool-instructions-759-1": {
+      "active": "v1",
+      "sha256": "0eb4e944c713261b3a0eb02d8a3bcd49c93957aaed07bca15de6ea44e41ef25a",
+      "versions": {
+        "v1": "0eb4e944c713261b3a0eb02d8a3bcd49c93957aaed07bca15de6ea44e41ef25a"
+      },
+      "purpose": "需要旧操作时用 get_file_change_history 或 get_model_call_summaries，需要原始历史参数/结果时用 get_tool_execution_detail；最新文件内容用 read。",
+      "sources": [
+        "backend/app/runtime/worker.py:759"
+      ]
+    },
+    "worker-tool-instructions-791-1": {
+      "active": "v1",
+      "sha256": "c65d7ddf123640a5463edb846e1303c009f2e8fd1270f309f69a2b7cfd9ac2e9",
+      "versions": {
+        "v1": "c65d7ddf123640a5463edb846e1303c009f2e8fd1270f309f69a2b7cfd9ac2e9"
+      },
+      "purpose": "这是任务级连续返修会话，文件权限按当前产品目录，不按旧卡片。自测成功仍允许必要阅读或修改；修改后重新自测。关键决定用 request_decision 明确暂停，不能用 BLOCKED 文本或结束文本代替受控工具。",
+      "sources": [
+        "backend/app/runtime/worker.py:791"
+      ]
+    },
+    "worker-tool-instructions-792-1": {
+      "active": "v1",
+      "sha256": "30370fa1dff5c133f375b15cc815343205e9da734214469025edf4ee71f0b0ca",
+      "versions": {
+        "v1": "30370fa1dff5c133f375b15cc815343205e9da734214469025edf4ee71f0b0ca"
+      },
+      "purpose": "model_call_budget 是当前 Step 的实际逻辑调用预算，已用包含本次，剩余为本次之后可请求次数；传输重试不计入该字段，它不是 HTTP 次数上限。安排必要修改、自测和提交，预算不会因接力或恢复重置。",
+      "sources": [
+        "backend/app/runtime/worker.py:792"
+      ]
+    },
+    "worker-tool-instructions-802-1": {
+      "active": "v1",
+      "sha256": "fccf2b973463ebc55f9321016a9f0973c6db5e479f975e87675e2dfc50df09b0",
+      "versions": {
+        "v1": "fccf2b973463ebc55f9321016a9f0973c6db5e479f975e87675e2dfc50df09b0"
+      },
+      "purpose": "context_session 表示已从完整修改批次后开始新会话。carried_file_context 是以前实际读过或写过范围的当前版本正文，优先使用；未提供或截断的范围仍可按需读取。历史原始思考与结果只读保存在证据中，可用查询工具检索。",
+      "sources": [
+        "backend/app/runtime/worker.py:802"
+      ]
+    },
+    "worker-tool-instructions-803-1": {
+      "active": "v1",
+      "sha256": "1dee520c2c8b767f0bcdb4055324fd5de1687f5c1fd31a3afff0841c301c1c01",
+      "versions": {
+        "v1": "1dee520c2c8b767f0bcdb4055324fd5de1687f5c1fd31a3afff0841c301c1c01"
+      },
+      "purpose": "diagnostic_report_refs 仅为已读诊断的查询引用，报告针对当时版本，不代表当前失败；当前结果以 unit_diagnostic 及其版本适用性为准。",
+      "sources": [
+        "backend/app/runtime/worker.py:803"
+      ]
+    },
+    "worker-tool-instructions-804-1": {
+      "active": "v1",
+      "sha256": "1374be140bca92b840efe87066493288bfcb3622a98777a9bc0199eb1eaf5cdc",
+      "versions": {
+        "v1": "1374be140bca92b840efe87066493288bfcb3622a98777a9bc0199eb1eaf5cdc"
+      },
+      "purpose": "carried_file_refs 仅记录未携带正文的已知范围，不能视作当前可用代码；确需这些内容时可以按原权限 read。",
+      "sources": [
+        "backend/app/runtime/worker.py:804"
+      ]
+    },
+    "worker-tool-instructions-835-1": {
+      "active": "v1",
+      "sha256": "8adfeaf5c29e3e08eaf9f3b7478fabed4fb2d50d2eb4b387e0ace37963c9c4df",
+      "versions": {
+        "v1": "8adfeaf5c29e3e08eaf9f3b7478fabed4fb2d50d2eb4b387e0ace37963c9c4df"
+      },
+      "purpose": "每次工具调用用description简述目的。current_task_facts是当前事实，work_progress是模型判断；最新独立验证失败不能被旧自测覆盖。product_file_manifest是当前文件版本；carried_file_context和协议工具消息只",
+      "sources": [
+        "backend/app/runtime/worker.py:835"
+      ]
+    },
+    "bug-action-planner": {
+      "active": "v1",
+      "sha256": "3ab88a8a544257183c3e8b1007003662b213f9d6179a19a4ecde500d54496cd6",
+      "versions": {
+        "v1": "3ab88a8a544257183c3e8b1007003662b213f9d6179a19a4ecde500d54496cd6"
+      },
+      "purpose": "你是现有产品变更的 Next Action Planner。根据已确认变更、最近真实结果及调查证据，从 allowed_actions 中选择下一行动。input 保存最初验收反馈，当前任务与证据适用性看 execution_state、current_evidence；不要把最",
+      "sources": [
+        "backend/app/runtime/worker.py:1379"
+      ]
+    },
+    "product-gate": {
+      "active": "v1",
+      "sha256": "5adf6f8f8af46ca81d1f977c90748e9ecbb9bded6696538ad5baf784ddd2855a",
+      "versions": {
+        "v1": "5adf6f8f8af46ca81d1f977c90748e9ecbb9bded6696538ad5baf784ddd2855a"
+      },
+      "purpose": "你只负责产品门径判断，本次没有任何工具，绝对不能生成或写入 Draft。",
+      "sources": [
+        "backend/app/runtime/worker.py:1482"
+      ]
+    },
+    "product-draft-author": {
+      "active": "v1",
+      "sha256": "204eb84f86b0380364a9d9282ec8fd897dcd59dfed7fafd464c39093d68fccd2",
+      "versions": {
+        "v1": "204eb84f86b0380364a9d9282ec8fd897dcd59dfed7fafd464c39093d68fccd2"
+      },
+      "purpose": "门径判断已确认无阻塞问题。根据用户明确需求、回答和系统固定边界生成产品文档，只写入 {{target}}，write 必须使用 overwrite=false。",
+      "sources": [
+        "backend/app/runtime/worker.py:1507"
+      ]
+    },
+    "product-draft-reviewer": {
+      "active": "v1",
+      "sha256": "712fcf5e4fa3312a5bef59f4fb377a5cfaaf9aae00e9f64a71744f31b56a5f9b",
+      "versions": {
+        "v1": "712fcf5e4fa3312a5bef59f4fb377a5cfaaf9aae00e9f64a71744f31b56a5f9b"
+      },
+      "purpose": "你是独立 Product Reviewer，不是 Draft 作者。对照全部用户消息、上一版正式需求和本轮 Draft 进行评审，只写入 {{review_target}}，write 必须使用 overwrite=false。",
+      "sources": [
+        "backend/app/runtime/worker.py:1522"
+      ]
+    },
+    "product-candidate-author": {
+      "active": "v1",
+      "sha256": "0e3e9b9856ac16bbc2d33222c3e9677f36d605c3bdb35e80f8f3e4ca63f4419f",
+      "versions": {
+        "v1": "0e3e9b9856ac16bbc2d33222c3e9677f36d605c3bdb35e80f8f3e4ca63f4419f"
+      },
+      "purpose": "你是 Product Author。根据 Draft、独立 Review、全部用户消息和上一版正式需求生成供用户审批的候选版，只写入 {{candidate_target}}，write 必须使用 overwrite=false。",
+      "sources": [
+        "backend/app/runtime/worker.py:1537"
+      ]
+    },
+    "product-change-coverage": {
+      "active": "v1",
+      "sha256": "4182a4ad98f2518ee7c6a2221802cbdf36762c456b392ae3e23c9dffb3caa269",
+      "versions": {
+        "v1": "4182a4ad98f2518ee7c6a2221802cbdf36762c456b392ae3e23c9dffb3caa269"
+      },
+      "purpose": "你是独立 Product Change Coverage Validator，只核对候选需求是否正确吸收变更契约，不写文件。",
+      "sources": [
+        "backend/app/runtime/worker.py:1555"
+      ]
+    },
+    "initial-design-planner": {
+      "active": "v1",
+      "sha256": "157d7bdb59c167d7f0c25bca80ba7e559b5b4502a958647975541bdbf671b1c0",
+      "versions": {
+        "v1": "157d7bdb59c167d7f0c25bca80ba7e559b5b4502a958647975541bdbf671b1c0"
+      },
+      "purpose": "你是新任务设计门径的 Next Action Planner。docs/product.md 已由程序在用户批准后正式化，正文即使残留「候选版」标题也不改变审批状态。Worker 的本地 HTTP 服务仅用于软件预览和健康检查，与生成产品不发起外部网络请求不冲突；这不是用户待决的",
+      "sources": [
+        "backend/app/runtime/worker.py:1638"
+      ]
+    },
+    "worker-answer-instruction-1754-1": {
+      "active": "v1",
+      "sha256": "63a994ddaffc4e57adba50ab69d11d2fda8defbb39e681303d4113652bfde8d5",
+      "versions": {
+        "v1": "63a994ddaffc4e57adba50ab69d11d2fda8defbb39e681303d4113652bfde8d5"
+      },
+      "purpose": "审批后的 confirmed_design_answers 是用户最新明确决定，优先于上游文档残留的待确认旧表述；必须吸收这些决定，不得继续写成待确认。",
+      "sources": [
+        "backend/app/runtime/worker.py:1754"
+      ]
+    },
+    "worker-extra-1757-1": {
+      "active": "v1",
+      "sha256": "c10f132d7dea4c6be5f63485c917d7166ce6a2da3a5a91904a292084296fd374",
+      "versions": {
+        "v1": "c10f132d7dea4c6be5f63485c917d7166ce6a2da3a5a91904a292084296fd374"
+      },
+      "purpose": "明确接口、数据、状态、流程和失败处理。",
+      "sources": [
+        "backend/app/runtime/worker.py:1757"
+      ]
+    },
+    "worker-extra-1757-3": {
+      "active": "v1",
+      "sha256": "6d01860331310f0478e915e4b6e9db79e69ff50689093513387a1c7692b3f7d4",
+      "versions": {
+        "v1": "6d01860331310f0478e915e4b6e9db79e69ff50689093513387a1c7692b3f7d4"
+      },
+      "purpose": "必须调用 submit_unit_for_test，普通结束文本不代表提交。",
+      "sources": [
+        "backend/app/runtime/worker.py:feedback"
+      ]
+    },
+    "worker-extra-1757-2": {
+      "active": "v1",
+      "sha256": "078d59d44135fa14f0238fdb3c83f41ef6a1f930793277cb670c13cccb3f6984",
+      "versions": {
+        "v1": "078d59d44135fa14f0238fdb3c83f41ef6a1f930793277cb670c13cccb3f6984"
+      },
+      "purpose": "按职责划分模块，定义依赖、数据所有权、公共接口与跨模块流程；较大模块按可独立测试的功能拆分。采用最少且完整可验收的单元，测试、文档和验证脚本归属相应功能，不单独拆成业务模块或功能。测试固定 Node 内置框架，真实浏览器固定 Python Playwright 且只连接系统提供 ",
+      "sources": [
+        "backend/app/runtime/worker.py:1758"
+      ]
+    },
+    "design-transition-planner": {
+      "active": "v1",
+      "sha256": "6b3838b1101f0c193b11d9b5494d789c22440f49c270feaa09cb55bc46ca8b82",
+      "versions": {
+        "v1": "6b3838b1101f0c193b11d9b5494d789c22440f49c270feaa09cb55bc46ca8b82"
+      },
+      "purpose": "你是已有产品设计阶段的 Next Action Planner，根据上游正式文档差异决定下一行动，不写文件。",
+      "sources": [
+        "backend/app/runtime/worker.py:1807"
+      ]
+    },
+    "worker-instructions-1854-1": {
+      "active": "v1",
+      "sha256": "cf2cea2fa7e8e9a8fce82f48bfe05e1da8f8990f5c8e06ac3563c59da078789d",
+      "versions": {
+        "v1": "cf2cea2fa7e8e9a8fce82f48bfe05e1da8f8990f5c8e06ac3563c59da078789d"
+      },
+      "purpose": "以旧{{label}}为唯一基线，根据上游差异和影响判断进行局部修订，只写入 {{draft}}，write 必须使用 overwrite=false。不得重写 preserved_sections，不得引入无上游依据的变化。{{extra}}{{answer_instructi",
+      "sources": [
+        "backend/app/runtime/worker.py:1854"
+      ]
+    },
+    "worker-instructions-1861-1": {
+      "active": "v1",
+      "sha256": "c5fc3d1caf34685bdb74b391d315e6635039876e633ebdcc636094b959a02611",
+      "versions": {
+        "v1": "c5fc3d1caf34685bdb74b391d315e6635039876e633ebdcc636094b959a02611"
+      },
+      "purpose": "根据正式上游文档生成{{label}}候选，只写入 {{draft}}；该文件不存在，必须使用 overwrite=false。{{extra}}{{answer_instruction}}",
+      "sources": [
+        "backend/app/runtime/worker.py:1861"
+      ]
+    },
+    "design-candidate-reviewer": {
+      "active": "v1",
+      "sha256": "d875f183671626aed6c9ae294f485fb81f20f7e24b3599b4e9387cc2e7940128",
+      "versions": {
+        "v1": "d875f183671626aed6c9ae294f485fb81f20f7e24b3599b4e9387cc2e7940128"
+      },
+      "purpose": "你是独立 reviewer。评审候选，区分阻塞问题、普通问题和建议，只写入 {{review}}；检查差异是否完整覆盖、preserved_sections 是否被意外修改、旧约束是否丢失以及是否引入无依据设计；write 必须使用 overwrite=false。",
+      "sources": [
+        "backend/app/runtime/worker.py:1876"
+      ]
+    },
+    "design-final-author": {
+      "active": "v1",
+      "sha256": "f68e1f5cb74e3195b8f0a4c9387d9d5ff316b3832d836b895e0b8e2021e2a070",
+      "versions": {
+        "v1": "f68e1f5cb74e3195b8f0a4c9387d9d5ff316b3832d836b895e0b8e2021e2a070"
+      },
+      "purpose": "根据候选与独立评审生成正式{{label}}，只写入 {{formal_version}}，不得改变上游需求；write 必须使用 overwrite=false。{{answer_instruction}}",
+      "sources": [
+        "backend/app/runtime/worker.py:1890"
+      ]
+    },
+    "worker-instructions-2026-1": {
+      "active": "v1",
+      "sha256": "b6addbe15f680edd577b099a69c499d91e50e0889ad75671cafd9d2e68aba20c",
+      "versions": {
+        "v1": "b6addbe15f680edd577b099a69c499d91e50e0889ad75671cafd9d2e68aba20c"
+      },
+      "purpose": "实现原生 HTML、CSS、JavaScript 软件，服从正式设计的模块边界。先在 text 中给出简短计划，再用 write 创建或覆盖文件。",
+      "sources": [
+        "backend/app/runtime/worker.py:2026"
+      ]
+    },
+    "worker-instructions-2034-1": {
+      "active": "v1",
+      "sha256": "aa31cd25368efeaa41b3e36fcab8022a508ad00fb59504bd131bff55475e287a",
+      "versions": {
+        "v1": "aa31cd25368efeaa41b3e36fcab8022a508ad00fb59504bd131bff55475e287a"
+      },
+      "purpose": "此任务经 Planner 确认无需独立 Dev Design；按 context 的正式产品需求和固定约束实施，不补写虚假的设计文档，也不擅自增加产品行为。",
+      "sources": [
+        "backend/app/runtime/worker.py:2034"
+      ]
+    },
+    "worker-instructions-2036-1": {
+      "active": "v1",
+      "sha256": "e6876aeefe027bc984df6a67f615cd79073199d2f4f2fec146746daf3cc0ed8a",
+      "versions": {
+        "v1": "e6876aeefe027bc984df6a67f615cd79073199d2f4f2fec146746daf3cc0ed8a"
+      },
+      "purpose": "这是失败后的返修，不是首次生成。正式实现依据、失败来源、对应的完整失败报告和当前产品文件已放在 context 或最近工具交互中；优先使用已有内容，需要原始历史证据时用查询工具，需要最新文件时可用 read。逐项判断失败来自实现、测试还是两者。测试期望与已批准需求冲突时修测试，实",
+      "sources": [
+        "backend/app/runtime/worker.py:2036"
+      ]
+    },
+    "worker-instructions-2041-1": {
+      "active": "v1",
+      "sha256": "32553b6bf2bb2e876fa5e49d6e9107c2dba0d3871d8e92b99b1ab9fbcbc4c243",
+      "versions": {
+        "v1": "32553b6bf2bb2e876fa5e49d6e9107c2dba0d3871d8e92b99b1ab9fbcbc4c243"
+      },
+      "purpose": "这是已验收产品的增量开发。必须比较变更后的正式产品需求、previous_product 与当前代码；若 Dev Design 变化，再比较 previous_dev_design 与当前 dev_design。以现有代码为基线，只修改受差异影响的代码和测试，不得推倒重写无关部分",
+      "sources": [
+        "backend/app/runtime/worker.py:2041"
+      ]
+    },
+    "acceptance-action-planner": {
+      "active": "v1",
+      "sha256": "498bebe617455ac35db444fa15382e650ff41c5865d33f32fd5f26f9ccb844b5",
+      "versions": {
+        "v1": "498bebe617455ac35db444fa15382e650ff41c5865d33f32fd5f26f9ccb844b5"
+      },
+      "purpose": "你是已有产品验收反馈的 Next Action Planner。用户描述只是线索；对照实际存在的正式文档、明确保存的设计跳过依据和已调查证据，直接决定下一行动。被跳过的文档不是空白正式设计；若新问题表明必须补设计，可选择对应更新。若要判断代码实现缺陷，先 inspect 相关产品",
+      "sources": [
+        "backend/app/runtime/worker.py:2500"
+      ]
+    },
+    "acceptance-consistency-validator": {
+      "active": "v1",
+      "sha256": "a80394d926714b1cbbb09cc9b9207fff1b8684702c11c30c8ba71d985c0ccfd5",
+      "versions": {
+        "v1": "a80394d926714b1cbbb09cc9b9207fff1b8684702c11c30c8ba71d985c0ccfd5"
+      },
+      "purpose": "你是独立 Acceptance Interpretation Consistency Validator，不重新解决产品问题，也不修改文件。",
+      "sources": [
+        "backend/app/runtime/worker.py:2636"
+      ]
+    },
+    "repair-executor": {
+      "active": "v5",
+      "sha256": "d222ca446c2c4d3639c30833c60a7b75fb5afc34ce1e0321d3435ac8ad7f7f71",
+      "versions": {
+        "v1": "0d73ed88b2d41979c2c283c13ad5fde37198b5ab0978bee41e668584f4f3858b",
+        "v2": "82160e2b235d26e636a04f4cb41c8fe3464ea35d1c9853055f634d41f7239c25",
+        "v3": "f3027aad7a5bfa0585a3fd4976a86210cc8b634a6e9ad73bd29fe8c74fade4cc",
+        "v4": "22c486554e114259e2596f902899ac5451392c45fdd649e7717f349b7e91f164",
+        "v5": "d222ca446c2c4d3639c30833c60a7b75fb5afc34ce1e0321d3435ac8ad7f7f71",
+        "v6": "8d31af0339453d8cb7d383ad417f4c5809cbade2aea98ab7b54b2137c04bc7ef"
+      },
+      "purpose": "你负责同一个已有网站返修任务的调查、计划、实现和修复。原始反馈与批准需求是依据，不能弱化断言来通过测试。",
+      "sources": [
+        "backend/app/runtime/repair_session.py:LEGACY_PROMPT",
+        "backend/app/runtime/repair_session.py:PREVIOUS_PROMPT",
+        "backend/app/runtime/repair_session.py:PREVIOUS_PROGRESS_PROMPT",
+        "backend/app/runtime/repair_session.py:PREVIOUS_NO_REVIEW_PROMPT",
+        "backend/app/runtime/repair_session.py:PROMPT"
+      ]
+    },
+    "worker-feedback-1": {
+      "active": "v1",
+      "sha256": "4d1f5e5b5790264835e9566cfa336913ae6b7458fd5b292fa19649c03ed83aca",
+      "versions": {
+        "v1": "4d1f5e5b5790264835e9566cfa336913ae6b7458fd5b292fa19649c03ed83aca"
+      },
+      "purpose": "实际文件版本变化或成功读取同版本的新范围；重复／失败读取不算进展。",
+      "sources": [
+        "backend/app/runtime/worker.py:715"
+      ]
+    },
+    "worker-feedback-2": {
+      "active": "v1",
+      "sha256": "9379b228e9cb21be9a202b7a3f84cab2ef751afec4b5fb72edb5bf9f9c95f746",
+      "versions": {
+        "v1": "9379b228e9cb21be9a202b7a3f84cab2ef751afec4b5fb72edb5bf9f9c95f746"
+      },
+      "purpose": "当前版本自测已通过，下一步只能立即调用 submit_unit_for_test，不要再读取或诊断。",
+      "sources": [
+        "backend/app/runtime/worker.py:716"
+      ]
+    },
+    "worker-feedback-3": {
+      "active": "v1",
+      "sha256": "dc4d2d256265b4490d9c80416fbae0e1d03a7d4b3ec37e4737d16e480372ed13",
+      "versions": {
+        "v1": "dc4d2d256265b4490d9c80416fbae0e1d03a7d4b3ec37e4737d16e480372ed13"
+      },
+      "purpose": "先自测，通过后提交；确有设计阻塞说明 BLOCKED，禁止重复读取未变文件",
+      "sources": [
+        "backend/app/runtime/worker.py:718"
+      ]
+    },
+    "worker-feedback-4": {
+      "active": "v1",
+      "sha256": "97ad60389c5128543033c696e9d6fb82e425b54101c58cce86878679fa72f808",
+      "versions": {
+        "v1": "97ad60389c5128543033c696e9d6fb82e425b54101c58cce86878679fa72f808"
+      },
+      "purpose": "原缺陷已修复且没有未完成修改时，请显式提交；程序负责后续浏览器和目标审查。",
+      "sources": [
+        "backend/app/runtime/worker.py:786"
+      ]
+    },
+    "worker-feedback-5": {
+      "active": "v1",
+      "sha256": "d3eaffab57f3f35a0ab0b37c100fd8c3528c3e42b1a61d91e95dc9ed33921dbd",
+      "versions": {
+        "v1": "d3eaffab57f3f35a0ab0b37c100fd8c3528c3e42b1a61d91e95dc9ed33921dbd"
+      },
+      "purpose": "完成修复后运行当前版本全量自测，再明确提交。",
+      "sources": [
+        "backend/app/runtime/worker.py:787"
+      ]
+    },
+    "scaffold-workflow-feedback-1": {
+      "active": "v1",
+      "sha256": "029f7e02fe51dbe011d598f255fe2aa8aca459fdbb6cc8738ce281b9079d6b7b",
+      "versions": {
+        "v1": "029f7e02fe51dbe011d598f255fe2aa8aca459fdbb6cc8738ce281b9079d6b7b"
+      },
+      "purpose": "只修正结构错误并返回完整 JSON；不得向用户提问。按业务所有权合并同域 store/view，保留公共接口和逐模块 todo 测试。",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:129"
+      ]
+    },
+    "scaffold-workflow-feedback-2": {
+      "active": "v1",
+      "sha256": "1f84b565edfa4afbe5747457b36f89a4b7a4fbea3443073621e2eeb788bab4ac",
+      "versions": {
+        "v1": "1f84b565edfa4afbe5747457b36f89a4b7a4fbea3443073621e2eeb788bab4ac"
+      },
+      "purpose": "files 必须同时包含 product/index.html、product/styles.css、product/verify_product.py、product/implementation.md，并全部登记到 app/ui。",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:132"
+      ]
+    },
+    "scaffold-workflow-feedback-3": {
+      "active": "v1",
+      "sha256": "0c77dbfebc2b44130c1bfd84af271a072e226d257a9ec3e12539008a94e061ea",
+      "versions": {
+        "v1": "0c77dbfebc2b44130c1bfd84af271a072e226d257a9ec3e12539008a94e061ea"
+      },
+      "purpose": "files 中的无效键是",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:135"
+      ]
+    },
+    "scaffold-workflow-feedback-4": {
+      "active": "v1",
+      "sha256": "f704c7b8c3447c5af6415c3a92e244c8a30634d28d58e79d616723d94d4dc06b",
+      "versions": {
+        "v1": "f704c7b8c3447c5af6415c3a92e244c8a30634d28d58e79d616723d94d4dc06b"
+      },
+      "purpose": "；所有文件键都必须是 product/ 开头的规范相对路径。",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:136"
+      ]
+    },
+    "scaffold-workflow-feedback-5": {
+      "active": "v1",
+      "sha256": "c43ffd099126b773fb19b3a464d5e0f42d937749976387c832f7ffec0ae3a597",
+      "versions": {
+        "v1": "c43ffd099126b773fb19b3a464d5e0f42d937749976387c832f7ffec0ae3a597"
+      },
+      "purpose": "模块",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:140"
+      ]
+    },
+    "scaffold-workflow-feedback-6": {
+      "active": "v1",
+      "sha256": "084904fa778d0767931908cebc82aac71b0b03f16210a5ddb08ed2335c906c47",
+      "versions": {
+        "v1": "084904fa778d0767931908cebc82aac71b0b03f16210a5ddb08ed2335c906c47"
+      },
+      "purpose": "声明的",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:140"
+      ]
+    },
+    "scaffold-workflow-feedback-7": {
+      "active": "v1",
+      "sha256": "0f50bb9628d5151bda38d45fc288c528224b28ae5cff15fc43bfcc6dd6db2def",
+      "versions": {
+        "v1": "0f50bb9628d5151bda38d45fc288c528224b28ae5cff15fc43bfcc6dd6db2def"
+      },
+      "purpose": "未与 files 键逐字匹配；核对是否应写",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:141"
+      ]
+    },
+    "scaffold-workflow-feedback-8": {
+      "active": "v1",
+      "sha256": "02421fc60ac919aca857dacbfe56ce219aa2023acbe2799ccefff669a2222ce4",
+      "versions": {
+        "v1": "02421fc60ac919aca857dacbfe56ce219aa2023acbe2799ccefff669a2222ce4"
+      },
+      "purpose": "，并让 implementation_files／test_file 与 files 键完全一致。",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:142"
+      ]
+    },
+    "scaffold-workflow-feedback-9": {
+      "active": "v1",
+      "sha256": "0343d342816926168c9f2634a5702b16b11198eab92f94fd9589072184da84ce",
+      "versions": {
+        "v1": "0343d342816926168c9f2634a5702b16b11198eab92f94fd9589072184da84ce"
+      },
+      "purpose": "文件",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:144"
+      ]
+    },
+    "scaffold-workflow-feedback-10": {
+      "active": "v1",
+      "sha256": "02e28e9679adb24fb49a667fb6e5f35f3b0a3c063c0a57c088019f5bd095338a",
+      "versions": {
+        "v1": "02e28e9679adb24fb49a667fb6e5f35f3b0a3c063c0a57c088019f5bd095338a"
+      },
+      "purpose": "已被其他模块声明；每个文件只能有一个模块所有者。",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:144"
+      ]
+    },
+    "scaffold-workflow-feedback-11": {
+      "active": "v1",
+      "sha256": "c6a06ff098e0b71069c64e0de864353c4c242552a1b0010d82f7b172c19070e4",
+      "versions": {
+        "v1": "c6a06ff098e0b71069c64e0de864353c4c242552a1b0010d82f7b172c19070e4"
+      },
+      "purpose": "module.id 必须是至少两个字符的英文小写短横线标识，且不得重复。",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:147"
+      ]
+    },
+    "scaffold-workflow-feedback-12": {
+      "active": "v1",
+      "sha256": "63cfb09fbcdd3b5cc7928f16cf28b93f441a28853b27137ad622daaf3f448868",
+      "versions": {
+        "v1": "63cfb09fbcdd3b5cc7928f16cf28b93f441a28853b27137ad622daaf3f448868"
+      },
+      "purpose": "文件必须不超过 20 个；继续合并同一业务域实现文件，不得删除固定入口。",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:149"
+      ]
+    },
+    "scaffold-workflow-feedback-13": {
+      "active": "v1",
+      "sha256": "5734ed8aa22eb52ba2a29246fa1e24095c701e70ee075f0329c2c8db5ffce946",
+      "versions": {
+        "v1": "5734ed8aa22eb52ba2a29246fa1e24095c701e70ee075f0329c2c8db5ffce946"
+      },
+      "purpose": "把错误列出的每个文件登记到唯一模块；入口、样式、说明和验证脚本归 app/ui。",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:151"
+      ]
+    },
+    "scaffold-workflow-feedback-14": {
+      "active": "v1",
+      "sha256": "67750317d24764eff70638a13235d5c5c6ac3c230e29480ec033c7e41a1587bf",
+      "versions": {
+        "v1": "67750317d24764eff70638a13235d5c5c6ac3c230e29480ec033c7e41a1587bf"
+      },
+      "purpose": "骨架必须能被 Node 实际导入并发现 todo 测试；移除顶层循环引用访问，跨模块只保留延迟注入的接口形状，不得在模块初始化时互相求值。",
+      "sources": [
+        "backend/app/runtime/scaffold_workflow.py:153"
+      ]
+    },
+    "slice-workflow-feedback-1": {
+      "active": "v1",
+      "sha256": "9b71a736b75021fb7f25116f966e8668e81d7131ff77e2241d6eb809bf234cdd",
+      "versions": {
+        "v1": "9b71a736b75021fb7f25116f966e8668e81d7131ff77e2241d6eb809bf234cdd"
+      },
+      "purpose": "只修正结构错误，返回完整 JSON；这是内部工程校验，不得向用户 clarify。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:359"
+      ]
+    },
+    "slice-workflow-feedback-2": {
+      "active": "v1",
+      "sha256": "6450a38bf2b8887e7626c59c90b88afdb4aed453fcff2196374fab6282671dc2",
+      "versions": {
+        "v1": "6450a38bf2b8887e7626c59c90b88afdb4aed453fcff2196374fab6282671dc2"
+      },
+      "purpose": "当前验收设计缺陷尚未交付，必须依据 current_acceptance_feedback 和 pending_repair_objectives 生成返修业务卡，包含需要修改的实现与验证文件。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:361"
+      ]
+    },
+    "slice-workflow-feedback-3": {
+      "active": "v1",
+      "sha256": "50d45ebac38b3ca282fd7fd59aacbb54d03f9ecd86c1607c46b467a963a09cbb",
+      "versions": {
+        "v1": "50d45ebac38b3ca282fd7fd59aacbb54d03f9ecd86c1607c46b467a963a09cbb"
+      },
+      "purpose": "coverage_summary 必须是非空数组；每项写非空文字，或写 {requirement/acceptance: 非空文字, covered_by: 非空文字或非空文字数组}。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:363"
+      ]
+    },
+    "slice-workflow-feedback-4": {
+      "active": "v1",
+      "sha256": "3840970e93fe7f03544add635967ba7f983ae3e3e0b8d7e5d66f841162d5e07b",
+      "versions": {
+        "v1": "3840970e93fe7f03544add635967ba7f983ae3e3e0b8d7e5d66f841162d5e07b"
+      },
+      "purpose": "不要创建独立测试、文档或浏览器验证切片；系统在切片完成后另有全局浏览器验证。若固定入口文件尚缺，把它们并入完成可运行产品的 app-delivery 业务切片。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:366"
+      ]
+    },
+    "slice-workflow-feedback-5": {
+      "active": "v1",
+      "sha256": "be9ddd4650912a4a6efefb98505fc3a8567fbd1cabca68ba9a7e1c82ba1a005c",
+      "versions": {
+        "v1": "be9ddd4650912a4a6efefb98505fc3a8567fbd1cabca68ba9a7e1c82ba1a005c"
+      },
+      "purpose": "当前仍缺少固定交付入口，不能宣布 complete。请创建一张 app-delivery 业务切片补齐 missing_product_entries，并以可运行产品交付为业务目标。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:369"
+      ]
+    },
+    "slice-workflow-feedback-6": {
+      "active": "v1",
+      "sha256": "d8f90e78817a057b26a3843658d24dbc7bea387828b855c4211b1caa987d1bab",
+      "versions": {
+        "v1": "d8f90e78817a057b26a3843658d24dbc7bea387828b855c4211b1caa987d1bab"
+      },
+      "purpose": "必须优先选择 remaining_todo_files 对应的业务模块，并在该业务切片中把 todo 改成真实断言；仍有 todo 时不得 complete。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:373"
+      ]
+    },
+    "slice-workflow-feedback-7": {
+      "active": "v1",
+      "sha256": "af44b8a5a7633a818dc0222c1b107ef635df081b05c4bac30f708c55bbeafa22",
+      "versions": {
+        "v1": "af44b8a5a7633a818dc0222c1b107ef635df081b05c4bac30f708c55bbeafa22"
+      },
+      "purpose": "当前卡依赖尚未交付的公共接口。必须把这些接口所属模块的全部骨架实现文件和测试文件加入当前卡，并把所属模块加入 owners；不得把缺口留给 Developer。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:376"
+      ]
+    },
+    "slice-workflow-feedback-8": {
+      "active": "v1",
+      "sha256": "c7c9846fe8adae5e8e7b03ea397527a67fcd66d103238044a3c7ce4ec9d996ce",
+      "versions": {
+        "v1": "c7c9846fe8adae5e8e7b03ea397527a67fcd66d103238044a3c7ce4ec9d996ce"
+      },
+      "purpose": "按 scaffold_contract 公共接口逐条修正 required_interfaces 和 acceptance_interfaces；每条 acceptance 必须映射其真实需要的全部公共接口。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:381"
+      ]
+    },
+    "slice-workflow-feedback-9": {
+      "active": "v1",
+      "sha256": "ca50c5f47f9d7404ad690c677e14b7408eb36a4a962b59c1088267150b1d396e",
+      "versions": {
+        "v1": "ca50c5f47f9d7404ad690c677e14b7408eb36a4a962b59c1088267150b1d396e"
+      },
+      "purpose": "程序诊断仅提供当前真实错误，不算开发自测。按错误位置读取必要范围并修复，同时完成原始验收目标；仍须主动 run_unit_tests，通过后显式提交。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:628"
+      ]
+    },
+    "slice-workflow-feedback-10": {
+      "active": "v1",
+      "sha256": "3c6ae435ff53df1cfb57aa5ab028715274df1701e698ad6821c552345525db06",
+      "versions": {
+        "v1": "3c6ae435ff53df1cfb57aa5ab028715274df1701e698ad6821c552345525db06"
+      },
+      "purpose": "保留并完成原始验收目标；最新失败是当前阻塞，不能替代原始目标。先读取必要文件，补对应操作与断言，修改后测试并提交。",
+      "sources": [
+        "backend/app/runtime/slice_workflow.py:710"
+      ]
+    },
+    "unit-workflow-feedback-1": {
+      "active": "v1",
+      "sha256": "f917fa34998b6ef448f7360f18b49540f89d4e2c22076965699a1b6ee21dec2a",
+      "versions": {
+        "v1": "f917fa34998b6ef448f7360f18b49540f89d4e2c22076965699a1b6ee21dec2a"
+      },
+      "purpose": "返回完整 JSON；缩短 issues，不重复设计正文。",
+      "sources": [
+        "backend/app/runtime/unit_workflow.py:445"
+      ]
+    }
+  },
+  "migration_baseline": {
+    "acceptance-correction-reviewer": "v1",
+    "acceptance-corrector": "v1",
+    "acceptance-coverage-reviewer": "v1",
+    "acceptance-extractor": "v2",
+    "acceptance-reviewer": "v2",
+    "architecture-scaffolder": "v5",
+    "design-author": "v1",
+    "design-reviewer": "v1",
+    "integration-repair-diagnoser": "v1",
+    "repair-objective-reviewer": "v1",
+    "slice-developer": "v13",
+    "slice-planner": "v6",
+    "unit-developer": "v1",
+    "unit-planner": "v1",
+    "execution-base": "v1",
+    "worker-tool-instructions-738-1": "v1",
+    "worker-tool-instructions-740-1": "v1",
+    "worker-tool-instructions-740-2": "v1",
+    "worker-tool-instructions-740-3": "v1",
+    "worker-tool-instructions-744-1": "v1",
+    "worker-tool-instructions-745-1": "v1",
+    "worker-tool-instructions-748-1": "v1",
+    "worker-tool-instructions-751-1": "v1",
+    "worker-tool-instructions-752-1": "v1",
+    "worker-tool-instructions-755-1": "v1",
+    "worker-tool-instructions-755-2": "v1",
+    "worker-tool-instructions-759-1": "v1",
+    "worker-tool-instructions-791-1": "v1",
+    "worker-tool-instructions-792-1": "v1",
+    "worker-tool-instructions-802-1": "v1",
+    "worker-tool-instructions-803-1": "v1",
+    "worker-tool-instructions-804-1": "v1",
+    "worker-tool-instructions-835-1": "v1",
+    "bug-action-planner": "v1",
+    "product-gate": "v1",
+    "product-draft-author": "v1",
+    "product-draft-reviewer": "v1",
+    "product-candidate-author": "v1",
+    "product-change-coverage": "v1",
+    "initial-design-planner": "v1",
+    "worker-answer-instruction-1754-1": "v1",
+    "worker-extra-1757-1": "v1",
+    "worker-extra-1757-3": "v1",
+    "worker-extra-1757-2": "v1",
+    "design-transition-planner": "v1",
+    "worker-instructions-1854-1": "v1",
+    "worker-instructions-1861-1": "v1",
+    "design-candidate-reviewer": "v1",
+    "design-final-author": "v1",
+    "worker-instructions-2026-1": "v1",
+    "worker-instructions-2034-1": "v1",
+    "worker-instructions-2036-1": "v1",
+    "worker-instructions-2041-1": "v1",
+    "acceptance-action-planner": "v1",
+    "acceptance-consistency-validator": "v1",
+    "repair-executor": "v5",
+    "worker-feedback-1": "v1",
+    "worker-feedback-2": "v1",
+    "worker-feedback-3": "v1",
+    "worker-feedback-4": "v1",
+    "worker-feedback-5": "v1",
+    "scaffold-workflow-feedback-1": "v1",
+    "scaffold-workflow-feedback-2": "v1",
+    "scaffold-workflow-feedback-3": "v1",
+    "scaffold-workflow-feedback-4": "v1",
+    "scaffold-workflow-feedback-5": "v1",
+    "scaffold-workflow-feedback-6": "v1",
+    "scaffold-workflow-feedback-7": "v1",
+    "scaffold-workflow-feedback-8": "v1",
+    "scaffold-workflow-feedback-9": "v1",
+    "scaffold-workflow-feedback-10": "v1",
+    "scaffold-workflow-feedback-11": "v1",
+    "scaffold-workflow-feedback-12": "v1",
+    "scaffold-workflow-feedback-13": "v1",
+    "scaffold-workflow-feedback-14": "v1",
+    "slice-workflow-feedback-1": "v1",
+    "slice-workflow-feedback-2": "v1",
+    "slice-workflow-feedback-3": "v1",
+    "slice-workflow-feedback-4": "v1",
+    "slice-workflow-feedback-5": "v1",
+    "slice-workflow-feedback-6": "v1",
+    "slice-workflow-feedback-7": "v1",
+    "slice-workflow-feedback-8": "v1",
+    "slice-workflow-feedback-9": "v1",
+    "slice-workflow-feedback-10": "v1",
+    "unit-workflow-feedback-1": "v1"
+  }
+}

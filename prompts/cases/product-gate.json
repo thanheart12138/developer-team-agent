@@ -1,0 +1,128 @@
+{
+  "contract": {
+    "purpose": "你只负责产品门径判断，本次没有任何工具，绝对不能生成或写入 Draft。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/product-gate/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "level": "normal",
+      "kind": "normal",
+      "input": {
+        "task": "实现素材新增、编辑和按标题搜索；用户用表单保存，用列表编辑按钮修改。输入标题为空时提示并保留表单；保存后列表显示，刷新仍保留。",
+        "context": {
+          "confirmed_answers": [
+            "仅本地保存；不需要登录；颜色由系统默认。"
+          ]
+        }
+      },
+      "expected": "只返回READY，视觉配色不是阻塞问题。",
+      "forbidden": "不得继续询问配色或生成Draft。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "equals",
+          "path": "text",
+          "value": "READY"
+        }
+      ],
+      "reference_observation": {
+        "text": "READY",
+        "actions": []
+      },
+      "basis": "prompts/product-gate/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "boundary",
+      "level": "important",
+      "kind": "boundary",
+      "input": {
+        "task": "做一个素材管理软件。",
+        "context": {}
+      },
+      "expected": "首行BLOCKED，询问影响核心范围或交互的必要决定，最多三问且每项一个决定。",
+      "forbidden": "不得按软件名称默认新增、搜索、存储或编辑交互。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "contains",
+          "path": "text",
+          "value": "BLOCKED"
+        },
+        {
+          "op": "manual",
+          "reason": "首行BLOCKED且每项只有一个必要产品决定；不询问系统固定技术。"
+        }
+      ],
+      "reference_observation": {
+        "text": "BLOCKED\n1。素材需要支持哪些核心操作？",
+        "actions": []
+      },
+      "basis": "prompts/product-gate/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "counterexample",
+      "level": "important",
+      "kind": "counterexample",
+      "input": {
+        "task": "此前已确认表单新增与列表编辑；现在要求标题搜索。按明确需求继续，不要因为旧文档未写搜索再问一遍。",
+        "context": {
+          "old_product": "素材可新增与编辑，暂不搜索。",
+          "confirmed_feedback": "搜索框按标题关键词过滤，空关键词显示全部，刷新保留素材。"
+        }
+      },
+      "expected": "明确新反馈优先于旧约束，只返回READY。",
+      "forbidden": "不得把已确认变更误当为未决问题或保留旧限制。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "equals",
+          "path": "text",
+          "value": "READY"
+        }
+      ],
+      "reference_observation": {
+        "text": "READY",
+        "actions": []
+      },
+      "basis": "prompts/product-gate/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "visual-default",
+      "level": "light",
+      "kind": "boundary",
+      "input": {
+        "task": "表单新增和列表编辑；保存后列表及刷新保留，空标题错误后可修正重试。按钮颜色未定。",
+        "context": {}
+      },
+      "expected": "只返回READY，允许简单视觉默认。",
+      "forbidden": "不得因按钮颜色阻塞。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "equals",
+          "path": "text",
+          "value": "READY"
+        }
+      ],
+      "reference_observation": {
+        "text": "READY",
+        "actions": []
+      },
+      "basis": "prompts/product-gate/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    }
+  ]
+}

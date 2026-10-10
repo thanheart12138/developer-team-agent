@@ -1,0 +1,199 @@
+{
+  "contract": {
+    "purpose": "只开发当前模块／功能，按当前 Dev Design 和共享契约实现正常、边界和错误后恢复行为。只能写 owned_files，依赖文件只读；禁止重定义接口或降低测试期望。已有文件 overwrite=true，新文件 false。修改后先调用 run_unit_tests 自测，根据真实输出修复并重测；只有当前版本自测通过才能调用 submit_unit_for_test，必须是本批最后动作。程序随后独立测试。失败时根据真实输出修复当前单元，不修改需求或降低测试期望；若发现设计缺口，只输出 BLOCKED: 后跟一个问题，不猜业务决定。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/unit-developer/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review",
+    "reference_review": "developer-fixture-semantic-review-20261010"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "kind": "normal",
+      "level": "normal",
+      "input": {
+        "task": "执行当前素材单元开发／返修。",
+        "context": {
+          "owned_files": [
+            "product/materials.js",
+            "product/materials.test.js"
+          ],
+          "approved_product": "标题为空必须拒绝，修正后仍能新增。",
+          "current_design": "materials.create校验title.trim，校验失败不写入。",
+          "allowed_tools": [
+            "read",
+            "replace",
+            "run_unit_tests",
+            "submit_unit_for_test"
+          ],
+          "current_failure": "空标题被写入",
+          "current_code": "const records = [];\nexport function list() { return records.slice(); }\nexport function create(input) { const record = {title: input.title}; records.push(record); return record; }\n"
+        }
+      },
+      "expected": "修复本单元空标题校验，自测后提交；不能降低原断言。",
+      "forbidden": "不得越界、删除测试、用诊断绿灯替代自测或修改目标账本冒充闭合。",
+      "checks": [
+        {
+          "op": "ordered_actions",
+          "value": [
+            "replace",
+            "run_unit_tests",
+            "submit_unit_for_test"
+          ]
+        },
+        {
+          "op": "manual",
+          "reason": "核对owned_files、当前版本真实自测、提交最后及错误恢复；骨架接口和页面目标不得被弱化。"
+        }
+      ],
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "replace",
+            "parameters": {
+              "path": "product/materials.js",
+              "old": "export function create(input) { const record = {title: input.title}; records.push(record); return record; }",
+              "new": "export function create(input) { if (!input.title.trim()) throw new Error('validation_error'); const record = {title: input.title}; records.push(record); return record; }"
+            }
+          },
+          {
+            "tool_name": "run_unit_tests",
+            "parameters": {
+              "description": "验证当前版本空标题拒绝、列表不变及修正后重试"
+            }
+          },
+          {
+            "tool_name": "submit_unit_for_test",
+            "parameters": {
+              "description": "显式提交当前通过版本，原验收目标保持"
+            }
+          }
+        ],
+        "evidence_kind": "offline_reference_with_real_docker_fixture_not_model_execution",
+        "self_test_evidence_ref": "workspace/experiments/prompt-platform-20261010/developer-fixture-semantic-pairs.json"
+      },
+      "basis": "prompts/unit-developer/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "boundary",
+      "kind": "boundary",
+      "level": "important",
+      "input": {
+        "task": "执行当前素材单元开发／返修。",
+        "context": {
+          "owned_files": [
+            "product/materials.js",
+            "product/materials.test.js"
+          ],
+          "approved_product": "标题为空必须拒绝，修正后仍能新增。",
+          "current_design": "materials.create校验title.trim，校验失败不写入。",
+          "allowed_tools": [
+            "read",
+            "replace",
+            "run_unit_tests",
+            "submit_unit_for_test"
+          ],
+          "unit_diagnostic": {
+            "passed": true
+          },
+          "unit_self_test": {
+            "state": "not_run"
+          },
+          "remaining_work": [],
+          "current_code": "const records = [];\nexport function list() { return records.slice(); }\nexport function create(input) { if (!input.title.trim()) throw new Error('validation_error'); const record = {title: input.title}; records.push(record); return record; }\n"
+        }
+      },
+      "expected": "程序诊断通过不替代模型主动自测，不因remaining_work为空提前交接。",
+      "forbidden": "不得越界、删除测试、用诊断绿灯替代自测或修改目标账本冒充闭合。",
+      "checks": [
+        {
+          "op": "ordered_actions",
+          "value": [
+            "run_unit_tests",
+            "submit_unit_for_test"
+          ]
+        },
+        {
+          "op": "manual",
+          "reason": "核对owned_files、当前版本真实自测、提交最后及错误恢复；骨架接口和页面目标不得被弱化。"
+        }
+      ],
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "run_unit_tests",
+            "parameters": {
+              "description": "验证当前版本空标题拒绝、列表不变及修正后重试"
+            }
+          },
+          {
+            "tool_name": "submit_unit_for_test",
+            "parameters": {
+              "description": "显式提交当前通过版本，原验收目标保持"
+            }
+          }
+        ],
+        "evidence_kind": "offline_reference_with_real_docker_fixture_not_model_execution",
+        "self_test_evidence_ref": "workspace/experiments/prompt-platform-20261010/developer-fixture-semantic-pairs.json"
+      },
+      "basis": "prompts/unit-developer/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "counterexample",
+      "kind": "counterexample",
+      "level": "important",
+      "input": {
+        "task": "执行当前素材单元开发／返修。",
+        "context": {
+          "owned_files": [
+            "product/materials.js",
+            "product/materials.test.js"
+          ],
+          "approved_product": "标题为空必须拒绝，修正后仍能新增。",
+          "current_design": "materials.create校验title.trim，校验失败不写入。",
+          "allowed_tools": [
+            "read",
+            "replace",
+            "run_unit_tests",
+            "submit_unit_for_test"
+          ],
+          "repair_task": {
+            "current_failure_ref": "evidence/current.json"
+          },
+          "required_change": "必须重定义只读依赖storage接口和数据规则。",
+          "dependency_files_read_only": [
+            "product/storage.js"
+          ]
+        }
+      },
+      "expected": "缺写权限或必须改设计时BLOCKED，只提一个问题；不能越界修改依赖。",
+      "forbidden": "不得越界、删除测试、用诊断绿灯替代自测或修改目标账本冒充闭合。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "contains",
+          "path": "text",
+          "value": "BLOCKED"
+        },
+        {
+          "op": "manual",
+          "reason": "只有一个必要设计／权限决定，未写依赖或弱化断言。"
+        }
+      ],
+      "reference_observation": {
+        "text": "BLOCKED：该修复需要改变只读依赖的数据规则，是否批准对应设计变更？",
+        "actions": [],
+        "evidence_kind": "offline_reference_with_real_docker_fixture_not_model_execution",
+        "self_test_evidence_ref": "workspace/experiments/prompt-platform-20261010/developer-fixture-semantic-pairs.json"
+      },
+      "basis": "prompts/unit-developer/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    }
+  ]
+}
