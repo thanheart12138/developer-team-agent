@@ -28,6 +28,9 @@ class ModelRequest:
     tools: list[dict]
     request_id: str
     on_delta: Callable[[str], None] | None = None
+    conversation_id: str | None = None
+    on_transport: Callable[[dict], None] | None = None
+    original_channel_only: bool = False
 
 
 @dataclass

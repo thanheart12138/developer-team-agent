@@ -122,6 +122,8 @@ $env:SIMULATOR_MODEL_PROVIDER = "openrouter"
 
 Worker 按阶段自动路由：需求文档、架构设计和 Dev Design 首选 Kimi Code；开发、测试、启动、浏览器验证及返修使用 DeepSeek。Kimi 调用发生凭据、HTTP、传输或响应协议等技术故障时，同一逻辑调用自动降级到 DeepSeek；业务评审、澄清或校验不通过不会触发降级。Kimi 默认使用 OpenAI 兼容端点 `https://api.kimi.com/coding/v1` 和自动升级别名 `kimi-for-coding`，单次最大输出为 8192 Token；模型 ID 和输出上限可分别用 `SIMULATOR_KIMI_MODEL`、`SIMULATOR_KIMI_MAX_COMPLETION_TOKENS` 覆盖。
 
+2026-10-13 起，上述模型分工保持，DeepSeek、Kimi 与 Luna 请求默认优先走 OpenCode Go，实际模型分别为 `deepseek-v4.1-flash`、`kimi-k2.7-code`、`gpt-6-luna`。技术失败后回退对应原渠道，暂态错误最多先尝试三次；预算耗尽不回退。认证读取 `secrets/opencode_api_key` 或 `secrets/opencode_api_key.textClipping`，也可用 `SIMULATOR_OPENCODE_API_KEY_FILE` 指定已有文件；不需要修改 `.env`。`SIMULATOR_OPENCODE_ENABLED=false` 可使用原渠道。旧固定模型返修会话和旧固定目的地评测保持原授权。新评测授权同时列出 OpenCode 目的地和原渠道回退目的地。Luna 使用非流式 Responses，完成后展示文本；实际渠道、模型和失败尝试单独审计。
+
 分别打开三个 PowerShell 窗口，并在项目根目录运行：
 
 ```powershell

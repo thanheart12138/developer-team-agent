@@ -38,7 +38,7 @@ class RealEvaluation:
             raise ValueError('real_run_path_unsafe')
         return path
 
-    def payload(self, name: str, version: str, case_id: str) -> dict:
+    def payload(self, name: str, version: str, case_id: str, *, opencode: bool | None = None) -> dict:
         """固定登记案例与工具协议，只传送案例内已审阅输入。"""
         document, case_hash = self.store.cases(name)
         case = next((item for item in document['cases'] if item['id'] == case_id), None)
@@ -72,10 +72,13 @@ class RealEvaluation:
             if int(version[1:]) >= 6:
                 tools.append(VERIFY_AND_SUBMIT_SCHEMA)
             prompt = compose_prompts([load_prompt('execution-base', prompt_root=self.store.root), prompt])
+        # 已审批运行按原目的地重建身份，不受当前渠道开关影响。
+        use_opencode = settings.opencode_enabled if opencode is None else opencode
         return {'instructions': prompt.text, 'input': case['input'].get('task', ''),
                 'context': case['input'].get('context', {}), 'tools': tools,
                 'components': list(prompt.components), 'case_hash': case_hash,
-                'model': settings.deepseek_model, 'base_url': settings.deepseek_base_url}
+                'model': 'deepseek-v4.1-flash' if use_opencode else settings.deepseek_model,
+                'base_url': 'https://opencode.ai' if use_opencode else settings.deepseek_base_url}
 
     def prepare(self, name: str, version: str, case_id: str, http_cap: int) -> dict:
         """只创建待审批固定输入，不创建批准文件或发送请求。"""
@@ -94,8 +97,12 @@ class RealEvaluation:
                                   '已有现场不得重置，工具只观察不执行；页面不能创建授权。\n')
         path.mkdir(parents=True)
         manifest = {'id': run_id, 'name': name, 'version': version, 'case_id': case_id,
-                    'provider': 'deepseek', 'destination': 'https://api.deepseek.com',
+                    'provider': 'deepseek', 'destination': ('https://opencode.ai' if settings.opencode_enabled
+                                                          else 'https://api.deepseek.com'),
                     'http_cap': http_cap, 'input_hash': digest, 'mode': 'first_response_only'}
+        if settings.opencode_enabled:
+            # 新授权明确包括原渠道回退，旧审批文件不自动扩充外发目的地。
+            manifest['fallback_destination'] = 'https://api.deepseek.com'
         atomic_json(path / 'manifest.json', manifest)
         atomic_json(path / 'input.json', payload)
         return manifest
@@ -142,9 +149,14 @@ class RealEvaluation:
                     or any(approval.get(key) != manifest[key] for key in
                            ('input_hash', 'http_cap', 'provider', 'destination'))):
                 raise ValueError('real_model_authorization_mismatch')
-            if manifest['provider'] != 'deepseek' or manifest['destination'] != 'https://api.deepseek.com':
+            if manifest['destination'] == 'https://opencode.ai' and (
+                    manifest.get('fallback_destination') != 'https://api.deepseek.com'
+                    or approval.get('fallback_destination') != manifest['fallback_destination']):
+                raise ValueError('real_model_fallback_unconfirmed')
+            if manifest['provider'] != 'deepseek' or manifest['destination'] not in ('https://api.deepseek.com', 'https://opencode.ai'):
                 raise ValueError('real_model_destination_unconfirmed')
-            payload = self.payload(manifest['name'], manifest['version'], manifest['case_id'])
+            payload = self.payload(manifest['name'], manifest['version'], manifest['case_id'],
+                                   opencode=manifest['destination'] == 'https://opencode.ai')
             if payload['base_url'].rstrip('/') != manifest['destination']:
                 raise ValueError('real_model_destination_unconfirmed')
             digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -174,7 +186,8 @@ class RealEvaluation:
                     'budget': {'provider': 'deepseek', 'historical_attempts': 0, 'attempts_used': 0,
                                'total_limit': manifest['http_cap'], 'review_reserve': 0, 'requests': []}})
                 request = ModelRequest(payload['instructions'], payload['input'], payload['context'],
-                                       payload['tools'], manifest['id'])
+                                       payload['tools'], manifest['id'],
+                                       original_channel_only=manifest['destination'] == 'https://api.deepseek.com')
                 response = DeepSeekRuntime(db).call(task.id, request)
                 db.commit()
                 observation.update(text=response.text, actions=[{'tool_name': action.tool_name,

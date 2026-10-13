@@ -876,10 +876,22 @@ def _model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | 
                 request_context = current_facts(request_context, actual, history, tools)
                 tool_instructions = (load_prompt('worker-tool-instructions-835-1'))
         combined_prompt = compose_prompts([load_prompt('execution-base'), instruction_text, tool_instructions])
+        def record_transport(event: dict) -> None:
+            # 分别记录实际渠道发送和失败，逻辑模型分工不冒充 HTTP 目的地。
+            if event['status'] == 'fallback':
+                stream_parts.clear()
+                publish_live_response(str(workspace_for(task)), '', '')
+            safe_record_trace(db, task, run, "model_transport", event["status"], "模型渠道调用",
+                              event["status"], event,
+                              {"provider": event["provider"], "model": event["model"],
+                               "history_key": history_key, "request_id": request_id})
+
         request = ModelRequest(instructions=combined_prompt.text, input=input_text,
                                context=request_context,
                                tools=schemas,
-                               request_id=request_id, on_delta=on_delta)
+                               request_id=request_id, on_delta=on_delta,
+                               conversation_id=f'{task.id}:{run.id}:{history_key}',
+                               on_transport=record_transport)
         runtimes = [primary_runtime]
         if primary_runtime.provider == "kimi":
             runtimes.append(create_model_runtime(db, Step.develop))
@@ -887,14 +899,18 @@ def _model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | 
         protocol_error: ModelProtocolError | None = None
         final_error: Exception | None = None
         for provider_index, runtime in enumerate(runtimes):
+            from .opencode import OpenCodeRuntime, preferred_runtime
+            # 请求 Trace 保存实际首选渠道的正文，不把原渠道 payload 冒充发送体。
+            wire_runtime = preferred_runtime(runtime, task.id, request)
             safe_record_trace(db, task, run, "model_request", "running", "请求模型",
                               f"第 {run.model_call_count} 次逻辑调用" +
                               ("（降级）" if provider_index else ""),
                               {"request_id": request.request_id,
-                               "payload": runtime.build_payload(request)},
+                               "payload": wire_runtime.build_payload(request)},
                               {"history_key": history_key, "request_id": request.request_id,
                                "model_call_count": run.model_call_count,
-                               "provider": runtime.provider, "model": runtime.model_name,
+                               "provider": 'opencode' if isinstance(wire_runtime, OpenCodeRuntime) else runtime.provider,
+                               "model": wire_runtime.model_name, "logical_provider": runtime.provider,
                                "fallback": provider_index > 0,
                                "prompt_name": prompt.name if prompt else "legacy-inline",
                                "prompt_version": prompt.version if prompt else "unversioned",
@@ -1007,7 +1023,9 @@ def _model_tool_loop(db: Session, task: Task, run: StepRun, instructions: str | 
                            "raw_response": result.raw_response},
                           {"history_key": history_key, "request_id": result.request_id,
                            "message_id": result.message_id,
-                           "provider": runtime.provider, "model": runtime.model_name},
+                           "provider": result.raw_response.get('transport_provider', runtime.provider),
+                           "model": result.raw_response.get('transport_model', runtime.model_name),
+                           "logical_provider": runtime.provider},
                           finished_at=datetime.utcnow())
         if tool_schemas == [] and result.actions:
             raise RuntimeError("model_tool_call_not_allowed")

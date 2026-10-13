@@ -416,7 +416,7 @@ def execute(db, task, run) -> None:
         files = product_manifest(root / 'product')
         tests = {p: (root / 'product' / p).read_text() for p in files
                  if p.endswith(('.test.js', '.test.cjs', '.test.mjs')) or p == 'verify_product.py'}
-        state['session'] = {**binding, 'context_contract': 'v2', 'plan': None, 'decisions': [], 'original_tests': tests,
+        state['session'] = {**binding, 'channel_policy': 'opencode_first', 'context_contract': 'v2', 'plan': None, 'decisions': [], 'original_tests': tests,
                             'completion_tool_enabled': int(registered_prompt(selected_prompt).version[1:]) >= 6,
                             'prompt_versions': {**active_versions(),
                                                 'repair-executor': registered_prompt(selected_prompt).version}}

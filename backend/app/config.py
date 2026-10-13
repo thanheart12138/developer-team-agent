@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     database_url: str = "mysql+pymysql://root@127.0.0.1:3306/dev_team_simulator"
     workspace_root: Path = Path("workspace")
     model_provider: str = "deepseek"
+    opencode_enabled: bool = True
+    opencode_api_key_file: Path = Path("secrets/opencode_api_key")
     deepseek_api_key: str = ""
     deepseek_api_key_file: Path = Path("secrets/deepseek_api_key")
     deepseek_base_url: str = "https://api.deepseek.com"

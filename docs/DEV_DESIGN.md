@@ -461,6 +461,12 @@ FastAPI 不运行事件分发线程，也不寻找对应 Worker。严格单 Work
 
 ## 6．Model Runtime
 
+2026-10-13 当前有效渠道规则（用户确认）：DeepSeek、Luna、Kimi 优先使用 OpenCode Go，分别使用 deepseek-v4.1-flash、gpt-6-luna、kimi-k2.7-code。阶段职责保持。DeepSeek／Kimi 使用 Chat Completions，Luna 使用 Responses，转换函数工具定义、历史调用／结果和响应，不丢失工具调用 ID。所有 OpenCode 请求带 ai-agent-product/1.0 User-Agent 和稳定 x-opencode-session；会话身份按任务、StepRun 与 history_key 区分，重试保持。独立调用使用任务身份，不用每次变化的 request_id。
+
+OpenCode 技术失败后回退原渠道；可重试传输失败最多尝试三次，协议、认证或凭据失败立即回退，业务评审不通过不回退。预算耗尽不回退。每次 HTTP 继承任务实际请求预算，实际渠道、模型和失败证据进入 Trace／响应；逻辑模型分工与渠道身份分开。密钥只从指定文件读取，支持文本与 textClipping，不修改凭据。旧返修会话和已批准固定目的地评测保持原渠道，不迁移原授权；新评测审批明确 OpenCode 优先和原渠道回退。Luna 非流式响应仅在完成后展示文本。
+
+下文原渠道配置和 Kimi→DeepSeek 技术降级规则继续作为回退路径使用。
+
 Model Runtime 实现 DeepSeek、Kimi 与 OpenRouter 三个 Provider。Worker 创建 Runtime 时必须传入当前 Step，并按下表路由；OpenRouter 仅供脱离正式 Worker 流程的模型探针和调试调用，由 `SIMULATOR_MODEL_PROVIDER=openrouter` 选择，不改变固定阶段路由，也不同时调用多个 Provider。
 
 | Step | Provider | 默认模型 |

@@ -75,7 +75,7 @@ v1 不追求支持任意软件、多用户、云端部署或并行开发，只�
 - 模型：DeepSeek 与 Kimi 并存，按阶段固定路由；需求、架构和 Dev Design 使用 Kimi，开发及后续执行阶段使用 DeepSeek
 - 运行环境：Windows 本地
 
-Model Runtime 直接调用并封装兼容 Chat Completions 的 Provider，不引入第三方模型 SDK。DeepSeek 与 Kimi 仍承担正式 Worker 的固定阶段路由；OpenRouter 先作为独立可选 Provider 供模型探针调用，默认使用 GPT-6 Luna medium，并从当前进程环境读取代理设置，不进入正式任务路由。路由只影响模型传输层，不改变工具协议、状态机或任务数据。
+Model Runtime 直接封装模型协议，不引入第三方模型 SDK。2026-10-13 用户确认 DeepSeek、Kimi 与 Luna 优先使用 OpenCode Go，技术失败回退原渠道；阶段分工保持，Luna 的 Responses 工具协议转换在 Runtime 内完成。实际渠道与模型单独审计，所有 HTTP 共享原任务预算；稳定会话头支持同会话路由。旧固定模型返修会话与已批准固定目的地评测不自动迁移。具体契约见 Dev Design 第６节。
 
 ## 3．总体运行架构
 

@@ -175,6 +175,15 @@ class ChatCompletionsRuntime:
                            "tool_calls" if actions else "completed", raw_response)
 
     def call(self, task_id: int, request: ModelRequest) -> ModelResult:
+        # 按已确认渠道优先级调用；旧会话和固定目的地授权保持原渠道。
+        from .opencode import call_preferred
+        return call_preferred(self, task_id, request)
+
+    def request_headers(self, task_id: int, request: ModelRequest, api_key: str) -> dict:
+        # 原渠道只发送认证头，OpenCode 子类增加项目和会话标识。
+        return {"Authorization": f"Bearer {api_key}"}
+
+    def _call_direct(self, task_id: int, request: ModelRequest) -> ModelResult:
         # 流式调用 Chat Completions 并合并文本和工具参数。
         api_key = self.get_api_key()
         if not api_key:
@@ -192,6 +201,7 @@ class ChatCompletionsRuntime:
         task = self.db.get(Task, task_id)
         budget_root = Path(task.workspace_path) if task and task.workspace_path else None
         attempt = None
+        stream_done = False
 
         def merged_response() -> dict:
             # 汇总文本、完整工具参数和响应元信息，不保留原始分片。
@@ -210,13 +220,14 @@ class ChatCompletionsRuntime:
                     attempt = reserve_request(budget_root, self.provider, request.request_id)
                 # 认证头只用于传输，不进入审计响应。
                 with client.stream("POST", f"{self.base_url.rstrip('/')}/chat/completions",
-                                   headers={"Authorization": f"Bearer {api_key}"}, json=payload) as response:
+                                   headers=self.request_headers(task_id, request, api_key), json=payload) as response:
                     response.raise_for_status()
                     for line in response.iter_lines():
                         if not line or not line.startswith("data:"):
                             continue
                         data = line[5:].strip()
                         if data == "[DONE]":
+                            stream_done = True
                             break
                         event = json.loads(data)
                         for key in ("id", "model", "created", "usage", "system_fingerprint"):
@@ -248,6 +259,9 @@ class ChatCompletionsRuntime:
                             function = item.get("function") or {}
                             target["function"]["name"] += function.get("name") or ""
                             target["function"]["arguments"] += function.get("arguments") or ""
+                    # Go 流提前结束不能冒充成功，防止执行截断的工具调用。
+                    if getattr(self, "require_stream_done", False) and not stream_done:
+                        raise ValueError("opencode_stream_incomplete")
         except httpx.HTTPError as exc:
             # 传输中断仍携带部分文本和工具参数，由 Worker 归档一次。
             if budget_root:
