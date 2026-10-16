@@ -1,0 +1,190 @@
+{
+  "contract": {
+    "purpose": "你是新任务设计门径的 Next Action Planner。docs/product.md 已由程序在用户批准后正式化，正文即使残留「候选版」标题也不改变审批状态。Worker 的本地 HTTP 服务仅用于软件预览和健康检查，与生成产品不发起外部网络请求不冲突；这不是用户待决的产品设计。只依据已经批准的产品需求、现有正式设计和固定项目约束判断编码前还有没有必须写进独立设计文档的决定。不能按需求字数或软件名称判断。若模块职责、接口、数据、状态、关键流程或失败处理在正式需求和固定约束中已明确且无需额外取舍，可跳过不必要的设计文档；若某份设计承载必要取舍，则选对应更新行动。用户未确认的关键业务规则不能由你猜测，证据不足只提出一个澄清问题。只返回 JSON：action、reason、evidence（引用正式需求的具体句子，字符串数组）、unresolved_decisions（未解决的关键决定数组）、confidence（0 到 1）、clarifying_question。action 必须在 allowed_actions 中。跳过设计时 evidence 必须非空，unresolved_decisions 必须为空。不得调用工具或改文件。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/initial-design-planner/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "level": "normal",
+      "kind": "normal",
+      "input": {
+        "task": "已批准：仅原生静态页面显示欢迎文本；无交互、无数据存储或外部请求。程序本地预览不属于产品外部请求。",
+        "context": {
+          "phase": "architecture",
+          "allowed_actions": [
+            "update_architecture",
+            "update_dev_design",
+            "modify_code",
+            "clarify"
+          ],
+          "approved": true
+        }
+      },
+      "expected": "所有必要行为明确，action=modify_code；引用批准句子且未决事项为空。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "reason",
+            "evidence",
+            "unresolved_decisions",
+            "confidence",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "modify_code"
+        },
+        {
+          "op": "equals",
+          "path": "output.unresolved_decisions",
+          "value": []
+        },
+        {
+          "op": "manual",
+          "reason": "证据必须来自正式需求具体句子，不能按软件名字判断。"
+        },
+        {
+          "op": "source_quote",
+          "path": "output.evidence.0",
+          "source": "task"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"modify_code\", \"reason\": \"无额外模块与数据取舍。\", \"evidence\": [\"仅原生静态页面显示欢迎文本\"], \"unresolved_decisions\": [], \"confidence\": 0.9, \"clarifying_question\": null}",
+        "actions": []
+      },
+      "basis": "prompts/initial-design-planner/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "boundary",
+      "level": "important",
+      "kind": "boundary",
+      "input": {
+        "task": "已批准素材平台，登录后的素材可能私有，也可能团队共享，用户尚未选择。",
+        "context": {
+          "phase": "architecture",
+          "allowed_actions": [
+            "update_architecture",
+            "update_dev_design",
+            "modify_code",
+            "clarify"
+          ],
+          "approved": true
+        }
+      },
+      "expected": "关键权限规则未决定，action=clarify且仅一个问题。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "reason",
+            "evidence",
+            "unresolved_decisions",
+            "confidence",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "clarify"
+        },
+        {
+          "op": "manual",
+          "reason": "不猜测私有或共享规则。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"clarify\", \"reason\": \"素材可见范围决定数据与权限边界。\", \"evidence\": [\"用户尚未选择\"], \"unresolved_decisions\": [\"素材可见范围\"], \"confidence\": 0.3, \"clarifying_question\": \"素材仅本人可见还是团队共享？\"}",
+        "actions": []
+      },
+      "basis": "prompts/initial-design-planner/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "counterexample",
+      "level": "important",
+      "kind": "counterexample",
+      "input": {
+        "task": "已批准候选版标题的正式文档：仅静态展示文字，无存储和外部网络。不要因为标题含候选版再问审批。",
+        "context": {
+          "phase": "architecture",
+          "allowed_actions": [
+            "update_architecture",
+            "update_dev_design",
+            "modify_code",
+            "clarify"
+          ],
+          "input_source": {
+            "path": "docs/product.md"
+          },
+          "approved": true,
+          "project_constraints": "程序用本地HTTP预览。"
+        }
+      },
+      "expected": "不重新问审批或预览冲突，action=modify_code。",
+      "forbidden": "不得编造关键决定、写文件或输出与输入方向相反的结论。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "action",
+            "reason",
+            "evidence",
+            "unresolved_decisions",
+            "confidence",
+            "clarifying_question"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.action",
+          "value": "modify_code"
+        },
+        {
+          "op": "equals",
+          "path": "output.unresolved_decisions",
+          "value": []
+        },
+        {
+          "op": "manual",
+          "reason": "不能将程序预览或残留标题当作用户待决事项。"
+        },
+        {
+          "op": "source_quote",
+          "path": "output.evidence.0",
+          "source": "task"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"action\": \"modify_code\", \"reason\": \"程序正式审批状态优先于残留标题。\", \"evidence\": [\"仅静态展示文字，无存储和外部网络\"], \"unresolved_decisions\": [], \"confidence\": 0.9, \"clarifying_question\": null}",
+        "actions": []
+      },
+      "basis": "prompts/initial-design-planner/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    }
+  ]
+}

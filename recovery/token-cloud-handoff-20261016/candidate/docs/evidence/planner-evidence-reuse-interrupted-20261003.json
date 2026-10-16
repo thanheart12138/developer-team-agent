@@ -1,0 +1,117 @@
+{
+  "date": "2026-10-03",
+  "checked_at": "2026-10-03T16:13:39+08:00",
+  "status": "checkpoint_unrecoverable_partial_product_files_recovered_final_result_unknown",
+  "user_has_saved_backup": false,
+  "authorized_new_http_limit_including_retries": 6,
+  "additional_continue_resets_budget": false,
+  "last_observed_progress": {
+    "source": "prior_conversation_tool_output_summary_not_reaudited_from_disk",
+    "source_task_state": [
+      "failed",
+      "start_product",
+      67
+    ],
+    "original_start_run_id": 34,
+    "original_start_run_model_call_count": 2,
+    "temporary_root": "/private/tmp/planner-evidence-reuse-real-20261003-h4q75inu",
+    "http_attempts_observed": 3,
+    "calls_with_usage_observed": [
+      {
+        "http": 1,
+        "provider": "kimi",
+        "prompt_tokens": 4055,
+        "completion_tokens": 91,
+        "total_tokens": 4146
+      },
+      {
+        "http": 2,
+        "provider": "kimi",
+        "prompt_tokens": 4048,
+        "completion_tokens": 188,
+        "total_tokens": 4236
+      }
+    ],
+    "known_usage_subtotal": {
+      "prompt_tokens": 8103,
+      "completion_tokens": 279,
+      "total_tokens": 8382
+    },
+    "service_pid_observed": 70578,
+    "service_url_observed": "http://127.0.0.1:62384",
+    "normal_start_reported_succeeded": true,
+    "node_and_original_browser_reported_exit_zero": true,
+    "third_call": "deepseek_thinking_objective_review_started_response_not_observed",
+    "preparation_error_before_real_calls": "optional_checkpoint_file_absent",
+    "preparation_error_http_calls": 0
+  },
+  "current_readonly_audit": {
+    "last_system_boot_local": "2026-10-03T04:25:14+08:00",
+    "boot_time_source": "sysctl -n kern.boottime",
+    "temporary_data_disappearance_cause": "unknown",
+    "missing_roots": [
+      "/private/tmp/planner-evidence-reuse-real-20261003-h4q75inu",
+      "/private/tmp/context-slimming-delivery-real-20261003-5bjwjrk4",
+      "/private/tmp/context-slimming-deepseek-real-20261003-276n23ur",
+      "/private/tmp/objective-review-continuation-20261002-L3L7mW"
+    ],
+    "expected_pids_present": {
+      "27466": false,
+      "31445": false,
+      "70578": false
+    },
+    "expected_ports_listening": {
+      "61626": false,
+      "62384": false,
+      "3306": false
+    },
+    "project_workspace_hash_search": [
+      {
+        "source_file": "product/index.html",
+        "candidates": 9,
+        "matches": 0
+      },
+      {
+        "source_file": "product/verify_product.py",
+        "candidates": 9,
+        "matches": 0
+      },
+      {
+        "source_file": "product/src/tasks/tasks.js",
+        "candidates": 0,
+        "matches": 0
+      }
+    ],
+    "persistent_backup_found_in_checked_locations": false,
+    "formal_database_contents_checked": false,
+    "new_model_http_calls_during_recovery_audit": 0,
+    "services_started": false,
+    "database_modified": false,
+    "product_files_modified": false
+  },
+  "final_new_http_calls": null,
+  "final_new_usage": null,
+  "combined_prior_http_calls": 15,
+  "combined_prior_total_tokens": 496892,
+  "combined_final_total_tokens": null,
+  "complete_delivery_cost_reduction": null,
+  "objective_review_final_result": null,
+  "normal_finish_verified": false,
+  "final_task_state": null,
+  "independent_three_case_chrome_regression_executed": false,
+  "cross_run_cache_reuse_real_trigger_verified": false,
+  "user_accepted": false,
+  "next_dependency": "new_user_decision_required_for_any_rebuild_or_new_experiment",
+  "latest_readonly_recovery_audit": {
+    "evidence": "docs/evidence/material-platform-recovery-audit-20261003.json",
+    "recovered_product_files": [
+      "src/app/app.orchestrator.js",
+      "styles.css"
+    ],
+    "recovered_file_count": 2,
+    "expected_file_count": 20,
+    "original_sqlite_trace_checkpoint_recovered": false,
+    "new_model_http_calls": 0,
+    "original_budget_reset": false
+  }
+}

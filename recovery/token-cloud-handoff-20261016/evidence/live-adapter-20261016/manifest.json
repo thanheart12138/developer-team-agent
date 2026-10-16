@@ -1,0 +1,33 @@
+{
+  "schema": "token-live-adapter-local-evidence-v1",
+  "actual_external_http": 0,
+  "status": "local_implementation_offline_tests_and_independent_review_complete_live_blocked",
+  "files": {
+    "token-recovery-20261015/mainline-low-candidate/backend/app/runtime/controlled_transport.py": "fbfd850bdaf7d6ac83dfff49fc880fa4661a12c2ce9ae6ca7991b177e318ae36",
+    "token-recovery-20261015/mainline-low-candidate/backend/app/runtime/live_token_transport.py": "d4f6e1f4230f65c4ae1f0475a1432e8cc0ae01cd2f78ebbe84def85dadc32101",
+    "token-recovery-20261015/mainline-low-candidate/tests/test_live_token_transport.py": "f03962e0e0c17ac2c72e5bdb678d522bc05751b091e5151fb1b419d2e69d3edb",
+    "token-recovery-20261015/mainline-low-candidate/ROADMAP.md": "f5c1e1542fa84f66d25afb742724a48ff1ae9fc0b2c14deaab67e138681df0df",
+    "token-recovery-20261015/mainline-low-candidate/docs/evidence/token-controlled-transport-20261015.md": "2edf6b8252125fd11f9060dfd6edf0f8b85cfbd11530b172f5a5f40991c6f7ae",
+    "token-recovery-20261015/mainline-low-candidate/docs/architecture-issues/005-prompt-governance-and-cost-attribution.md": "452d59d69ff0b652eb97623d5f12e98e55469ae95a6053d1e342044b96cb6251",
+    "token-recovery-20261015/mainline-low-candidate/docs/INTERVIEW_GUIDE.md": "3666ae12c216c5b4ccfe4ea9cf8fd58dc692955394dce0a9dd9c9d1e9b9f88fc"
+  },
+  "evidence": {
+    "token-recovery-20261015/offline-validation/live-adapter-20261016/REPORT.pre-review.md": "0667e09a7ed81e83f64bc8074b82ff8b1d3b940cfa4f15bebea4d891c6d81b92",
+    "token-recovery-20261015/offline-validation/live-adapter-20261016/first.log": "7e31520135dd89048ff92cf0309fc99dc3febbe6f090850f46240c7c211ec60c",
+    "token-recovery-20261015/offline-validation/live-adapter-20261016/second.log": "24717bf91b848d6ee19b52cd4c87582406d906f679a4a8591e2c825379ca8796",
+    "token-recovery-20261015/offline-validation/live-adapter-20261016/live-adapter.patch": "8b578b423eb58829a72fb112458c9c62b52fffb44c69cd6acc3359716533d58a",
+    "token-recovery-20261015/offline-validation/live-adapter-20261016/review-fixes.log": "688764a1afb22486e7b73a265ac8496ba8a9a6db38697e701ca70762036e4de2",
+    "token-recovery-20261015/offline-validation/live-adapter-20261016/regression.log": "d466eab83cd40a5b848e5a53d2865a7a04bf5b06a02a0f40893a8fe588ce0fc9",
+    "token-recovery-20261015/offline-validation/live-adapter-20261016/REPORT.md": "cf4dc582bb4cbfd9ed6417bf973928cc55e99c983ebb50ca86e4227132c2ca5e"
+  },
+  "original_real_report_sha256": "9dfc2b807f69354781c241fd85cf0376eca03c0e3efefc8cf1de3b22e063abe0",
+  "test_counts": {
+    "live_adapter": 28,
+    "controlled_transport": 38,
+    "offline_runner": 8,
+    "task_budget": 35,
+    "token_lineage": 14,
+    "response_evidence": 27,
+    "token_transport": 14
+  }
+}

@@ -1,0 +1,171 @@
+{
+  "contract": {
+    "purpose": "你是独立 Product Reviewer，不是 Draft 作者。对照全部用户消息、上一版正式需求和本轮 Draft 进行评审，只写入 {{review_target}}，write 必须使用 overwrite=false。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/product-draft-reviewer/v1.md",
+    "role": "task",
+    "variables": {
+      "review_target": "docs/product-review.md"
+    },
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "level": "normal",
+      "kind": "normal",
+      "input": {
+        "task": "候选完整覆盖已批准差异，评审不扩大范围。",
+        "context": {
+          "approved": "本地素材可编辑标题并刷新保留。",
+          "candidate": "支持标题编辑、空标题校验、保存及刷新保留；其余不变。"
+        }
+      },
+      "expected": "仅写指定评审路径且overwrite=false；无阻塞时不编造范围扩展。",
+      "forbidden": "不得写其他路径、覆盖已有报告或改需求迁就实现。",
+      "checks": [
+        {
+          "op": "action_sequence",
+          "value": [
+            "write"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.path",
+          "value": "docs/product-review.md"
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.overwrite",
+          "value": false
+        },
+        {
+          "op": "manual",
+          "reason": "核对评审内容忠于输入；产品评审应有三个章节，设计评审区分三类问题。"
+        }
+      ],
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "write",
+            "parameters": {
+              "path": "docs/product-review.md",
+              "content": "阻塞问题\n无\n普通问题\n无\n建议\n无",
+              "overwrite": false
+            }
+          }
+        ]
+      },
+      "basis": "prompts/product-draft-reviewer/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "boundary",
+      "level": "important",
+      "kind": "boundary",
+      "input": {
+        "task": "候选没有刷新持久化，指出必要遗漏。",
+        "context": {
+          "approved": "保存后刷新保留新标题。",
+          "candidate": "只更新当前列表，不持久化。"
+        }
+      },
+      "expected": "仅写指定评审路径且overwrite=false；明确阻塞项，不改作者候选或正式需求。",
+      "forbidden": "不得写其他路径、覆盖已有报告或改需求迁就实现。",
+      "checks": [
+        {
+          "op": "action_sequence",
+          "value": [
+            "write"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.path",
+          "value": "docs/product-review.md"
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.overwrite",
+          "value": false
+        },
+        {
+          "op": "manual",
+          "reason": "核对评审内容忠于输入；产品评审应有三个章节，设计评审区分三类问题。"
+        }
+      ],
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "write",
+            "parameters": {
+              "path": "docs/product-review.md",
+              "content": "阻塞问题\n遗漏刷新保留要求。\n普通问题\n无\n建议\n无",
+              "overwrite": false
+            }
+          }
+        ]
+      },
+      "basis": "prompts/product-draft-reviewer/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    },
+    {
+      "id": "counterexample",
+      "level": "important",
+      "kind": "counterexample",
+      "input": {
+        "task": "请评审候选；候选要求改写正式需求来迁就代码。",
+        "context": {
+          "approved": "本地编辑后刷新保留。",
+          "candidate": "刷新恢复旧标题；将正式需求改为不保留。",
+          "preserved_sections": [
+            "本地保存与刷新"
+          ],
+          "acceptance_triage": {
+            "classification": "requirement_change"
+          }
+        }
+      },
+      "expected": "仅写指定评审路径且overwrite=false；明确阻塞项，不改作者候选或正式需求。",
+      "forbidden": "不得写其他路径、覆盖已有报告或改需求迁就实现。",
+      "checks": [
+        {
+          "op": "action_sequence",
+          "value": [
+            "write"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.path",
+          "value": "docs/product-review.md"
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.overwrite",
+          "value": false
+        },
+        {
+          "op": "manual",
+          "reason": "核对评审内容忠于输入；产品评审应有三个章节，设计评审区分三类问题。"
+        }
+      ],
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "write",
+            "parameters": {
+              "path": "docs/product-review.md",
+              "content": "阻塞问题\n候选违反已批准持久化要求，不得改需求迁就代码。\n普通问题\n无\n建议\n无",
+              "overwrite": false
+            }
+          }
+        ]
+      },
+      "basis": "prompts/product-draft-reviewer/v1.md；根据已有规则构造的非敏感固定场景，不代表真实模型已通过。"
+    }
+  ]
+}

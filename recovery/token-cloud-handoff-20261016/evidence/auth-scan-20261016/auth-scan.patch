@@ -1,0 +1,117 @@
+--- a/backend/app/runtime/controlled_transport.py
++++ b/backend/app/runtime/controlled_transport.py
+@@ -121,13 +121,15 @@
+         settlement_called=True
+         token_transport.settle(root,token_attempt,'responded' if usage is not None else 'failed',usage)
+         finish_request(root,http_attempt,'responded' if usage is not None else 'failed',usage)
+-    gate=None if responses else SSEEvidenceGate(evidence,FIXTURE_SECRET,settle,request_id=request.request_id)
++    # 同一局部合成认证值贯通请求头与两种协议的保全扫描；不读取真实凭据。
++    auth_secret=FIXTURE_SECRET
++    gate=None if responses else SSEEvidenceGate(evidence,auth_secret,settle,request_id=request.request_id)
+     try:
+         # 只使用合成认证标记；不读取环境凭据，也不允许环境代理或HTTP重定向。
+         with httpx.Client(transport=binding.transport,trust_env=False,follow_redirects=False,timeout=runtime.timeout) as client:
+             http_attempt=reserve_request(root,runtime.provider,request.request_id)
+             token_attempt=token_transport.reserve(root,runtime.provider,request.request_id,payload,expected_budget_id=binding.budget_id)
+-            with client.stream('POST',endpoint,json=payload,headers=runtime.request_headers(task_id,request,FIXTURE_SECRET)) as response:
++            with client.stream('POST',endpoint,json=payload,headers=runtime.request_headers(task_id,request,auth_secret)) as response:
+                 if responses:
+                     chunks=[];size=0;interrupted=False
+                     try:
+@@ -139,7 +141,7 @@
+                     except Exception:
+                         # 完整合法JSON已含usage时，后续断流不抹去可核消费。
+                         interrupted=True
+-                    result=_responses(b''.join(chunks),evidence,settle,response.status_code,interrupted=interrupted)
++                    result=_responses(b''.join(chunks),evidence,settle,response.status_code,scan_secret=auth_secret,interrupted=interrupted)
+                 else:
+                     gate.consume(response.iter_bytes(),http_status=response.status_code)
+                     result=gate.result
+--- a/backend/app/runtime/token_offline_runner.py
++++ b/backend/app/runtime/token_offline_runner.py
+@@ -9,8 +9,8 @@
+ FIXTURE_SECRET='offline-fixture-only-scan-sentinel'
+ 
+ 
+-def _responses(raw, root, sink, status, *, interrupted=False):
+-    """严格解析Responses并保存原JSON实体，派生Chat包仅供通用保全判定。"""
++def _responses(raw, root, sink, status, *, scan_secret, interrupted=False):
++    """严格解析Responses，使用调用方认证扫描值保全原实体与派生结构。"""
+     body={};usage=None;complete=False;scan='safe';calls=[];text=[];call_ids=set()
+     try:
+         if not isinstance(raw,bytes) or len(raw)>MAX_BYTES:
+@@ -53,7 +53,7 @@
+         # 不能重编码的正文不妨碍保存已核对usage；禁止原wire作为安全结果。
+         scan="unscannable"
+         encoded=encode({"usage":usage,"choices":[{"finish_reason":None,"message":{"content":"","tool_calls":[]}}]})
+-    result=capture(root,encoded,[FIXTURE_SECRET],sink,observed_usage=usage,http_status=status,
++    result=capture(root,encoded,[scan_secret],sink,observed_usage=usage,http_status=status,
+                    received_entity=raw,received_entity_scan=scan,received_entity_format='json',
+                    received_entity_complete=not interrupted)
+     return result
+@@ -86,7 +86,7 @@
+             failure=exc.code
+         result=gate.result
+     else:
+-        result=_responses(response_bytes,evidence,settle,http_status)
++        result=_responses(response_bytes,evidence,settle,http_status,scan_secret=FIXTURE_SECRET)
+     # verify会把新增unknown当阻塞；历史unknown继续单列，不补零。
+     after=token_lineage.verify(contract_path,contract_sha256)
+     report={'schema':'token-offline-fixture-result-v1','mode':'offline_fixture','actual_network_http':0,
+--- a/tests/test_controlled_transport.py
++++ b/tests/test_controlled_transport.py
+@@ -154,3 +154,54 @@
+         invoke(case,bind(case,lambda request:httpx.Response(200,stream=Broken()),channel,provider))
+     assert b.load(case[0])['known_tokens']==12
+     with SessionLocal() as db:assert db.query(Message).count()==0
++
++
++@pytest.mark.parametrize('channel,provider',[('direct','deepseek'),('go','openrouter')])
++@pytest.mark.parametrize('encoding',['plain','url','base64'])
++@pytest.mark.parametrize('location',['content','wire'])
++def test_auth_scan_uses_same_synthetic_value_as_headers(case,monkeypatch,channel,provider,encoding,location):
++    """替换合成认证值后，两种协议的正文及原始实体泄露均保留消费但禁止执行。"""
++    import base64
++    from urllib.parse import quote
++    from backend.app.runtime import controlled_transport
++    secret='synthetic-only+/auth=second-value'
++    monkeypatch.setattr(controlled_transport,'FIXTURE_SECRET',secret)
++    leak={'plain':secret,'url':quote(secret,safe=''),'base64':base64.b64encode(secret.encode()).decode()}[encoding]
++    def handler(request):
++        """核认证头与测试合成值一致，仅构造内存响应，不读取认证连接。"""
++        assert request.headers['Authorization']=='Bearer '+secret
++        raw=response(channel=='go').content
++        if location=='content':
++            raw=raw.replace(b'"ok"',json.dumps(leak).encode())
++        elif channel=='go':
++            body=json.loads(raw);body['fixture_metadata']=leak;raw=json.dumps(body).encode()
++        else:
++            raw=b': '+leak.encode()+b'\n\n'+raw
++        return httpx.Response(200,content=raw)
++    with pytest.raises(ControlledTransportError):
++        invoke(case,bind(case,handler,channel,provider))
++    assert b.load(case[0])['known_tokens']==12
++    with SessionLocal() as db:assert db.query(Message).count()==0
++    evidence=case[0]/'controlled-response-evidence/controlled'
++    manifest=json.loads((evidence/'response/manifest.json').read_bytes())
++    assert manifest['credentials_redacted'] is True
++    assert manifest['received_entity_saved'] is False
++    for path in evidence.rglob('*'):
++        if path.is_file():
++            data=path.read_bytes()
++            assert secret.encode() not in data and leak.encode() not in data
++
++
++@pytest.mark.parametrize('channel,provider',[('direct','deepseek'),('go','openrouter')])
++def test_changed_synthetic_auth_accepts_safe_response(case,monkeypatch,channel,provider):
++    """不同合成认证标记不影响无泄露回复，且证据仍明确零真实HTTP。"""
++    from backend.app.runtime import controlled_transport
++    secret='synthetic-safe-second-value'
++    monkeypatch.setattr(controlled_transport,'FIXTURE_SECRET',secret)
++    def handler(request):
++        """核对合成认证后返回安全内存回复。"""
++        assert request.headers['Authorization']=='Bearer '+secret
++        return response(channel=='go')
++    result=invoke(case,bind(case,handler,channel,provider))
++    assert result.text=='ok' and result.raw_response['actual_network_http']==0
++    assert b.load(case[0])['known_tokens']==12

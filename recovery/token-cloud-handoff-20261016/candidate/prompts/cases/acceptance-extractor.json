@@ -1,0 +1,158 @@
+{
+  "contract": {
+    "purpose": "你从已批准的产品文档提取系统内部的「用户可观察行为」标准，只返回 JSON 对象 {\"items\":[{\"source_quote\":\"产品原文中的连续片段\",\"action\":\"一个用户动作或触发条件\",\"observable_result\":\"用户能观察到的结果\"}]}，不得写文件或调用工具。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/acceptance-extractor/v2.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "kind": "normal",
+      "level": "normal",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "product_document": "点击新增后素材出现在列表；点击编辑后列表显示新标题。",
+          "extra_instruction": "不要额外推断产品功能。"
+        }
+      },
+      "expected": "拆成新增与编辑两个独立行为，不合并。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "items"
+          ]
+        },
+        {
+          "op": "manual",
+          "reason": "逐个核对独立动作、用户语言与原文，不能编造功能。"
+        },
+        {
+          "op": "length",
+          "path": "output.items",
+          "value": 2
+        },
+        {
+          "op": "source_quote",
+          "path": "output.items.0.source_quote",
+          "source": "context.product_document"
+        },
+        {
+          "op": "source_quote",
+          "path": "output.items.1.source_quote",
+          "source": "context.product_document"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"items\": [{\"source_quote\": \"点击新增后素材出现在列表\", \"action\": \"点击新增\", \"observable_result\": \"素材出现在列表\"}, {\"source_quote\": \"点击编辑后列表显示新标题\", \"action\": \"点击编辑\", \"observable_result\": \"列表显示新标题\"}]}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-extractor/v2.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "boundary",
+      "kind": "boundary",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "product_document": "标题为空时提示错误；修正标题后可以继续保存。",
+          "extra_instruction": "不要额外推断产品功能。"
+        }
+      },
+      "expected": "保留错误输入及错误后恢复两项，不遗漏恢复。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "items"
+          ]
+        },
+        {
+          "op": "manual",
+          "reason": "逐个核对独立动作、用户语言与原文，不能编造功能。"
+        },
+        {
+          "op": "length",
+          "path": "output.items",
+          "value": 2
+        },
+        {
+          "op": "source_quote",
+          "path": "output.items.0.source_quote",
+          "source": "context.product_document"
+        },
+        {
+          "op": "source_quote",
+          "path": "output.items.1.source_quote",
+          "source": "context.product_document"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"items\": [{\"source_quote\": \"标题为空时提示错误\", \"action\": \"输入空标题保存\", \"observable_result\": \"提示错误\"}, {\"source_quote\": \"修正标题后可以继续保存\", \"action\": \"修正标题后保存\", \"observable_result\": \"可继续保存\"}]}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-extractor/v2.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "counterexample",
+      "kind": "counterexample",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "product_document": "点击新增后素材出现在列表。使用原生JavaScript；明确不做登录。",
+          "extra_instruction": "不要额外推断产品功能。"
+        }
+      },
+      "expected": "只提取新增行为，不将技术栈或不做登录变成用户操作，也不按额外要求新增登录。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "items"
+          ]
+        },
+        {
+          "op": "manual",
+          "reason": "逐个核对独立动作、用户语言与原文，不能编造功能。"
+        },
+        {
+          "op": "length",
+          "path": "output.items",
+          "value": 1
+        },
+        {
+          "op": "source_quote",
+          "path": "output.items.0.source_quote",
+          "source": "context.product_document"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"items\": [{\"source_quote\": \"点击新增后素材出现在列表\", \"action\": \"点击新增\", \"observable_result\": \"素材出现在列表\"}]}",
+        "actions": []
+      },
+      "basis": "prompts/acceptance-extractor/v2.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    }
+  ]
+}

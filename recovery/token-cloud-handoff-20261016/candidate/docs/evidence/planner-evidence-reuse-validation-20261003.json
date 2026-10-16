@@ -1,0 +1,187 @@
+{
+  "date": "2026-10-03",
+  "scope": "已确认的 Planner 跨阶段证据复用与具体纠错；零新真实模型调用",
+  "implementation_files": [
+    "backend/app/runtime/worker.py",
+    "tests/test_context_slimming.py"
+  ],
+  "validation": {
+    "new_regression_instances": 14,
+    "initial_related_passed": 96,
+    "initial_related_failed": 1,
+    "total_related_instances": 97,
+    "failure": "新夹具把 path 错误假定为唯一或第一个错误，但实际 action/path 同时非法。",
+    "correction": "按 field 查找 path 并保留错误码及原因断言；未改实现。",
+    "corrected_targeted_passed": 1,
+    "full_related_suite_repeated_after_fixture_correction": false,
+    "compile_passed": true,
+    "diff_check_passed": true
+  },
+  "actual_prior_trace_audit": {
+    "passed": true,
+    "real_http_calls": 0,
+    "product_read_tool_calls": 0,
+    "source_task_state": [
+      "failed",
+      "start_product",
+      67
+    ],
+    "source_run_id": 34,
+    "actual_saved_inspection_count": 1,
+    "cross_run_reusable_paths": [
+      "product/src/tasks/tasks.js"
+    ],
+    "restored_evidence": {
+      "product/src/tasks/tasks.js": {
+        "sha256": "349eb19396195ff55cb36f5dae814b6f89053aceecd54e645d669b034dc059a6",
+        "evidence_ref": "traces/test/4/001344-bug_planner_inspect.json",
+        "step_run_id": 33
+      }
+    },
+    "old_actual_reply": {
+      "action": "inspect",
+      "path": "product/src/tasks/tasks.js",
+      "reason": "需要查看 handleSubmit 成功路径与错误提示残留的具体实现，确认成功保存后为何旧必填提示未被清除，以便最小化修复而不改变任务数据或状态规则。",
+      "evidence_refs": [
+        "evidence/independent-business-feedback-20261002.json",
+        "product/src/tasks/tasks.js"
+      ],
+      "clarifying_question": null
+    },
+    "new_protocol_errors": [],
+    "source_workspace_and_database_unchanged": true,
+    "limit": "仅证明真实旧 Trace 可恢复及原回复在新候选中合法，不证明模型下次会选择推进或完成交付。"
+  },
+  "worker_reload": {
+    "loaded": true,
+    "old_worker_pid": 73713,
+    "new_worker_pid": 27466,
+    "worker_source_sha256": "7b1369756a21b195132a0483a21e8b2ccdad211ddd150ac73618af36a6b75102",
+    "formal_snapshot_unchanged": true,
+    "original_platform_and_two_experiments_unchanged": true,
+    "product_pid": 31445,
+    "product_http_status": 200,
+    "formal_task_count": 24,
+    "formal_trace_count": 16908,
+    "real_model_http_calls": 0,
+    "failed_task_resumed": false,
+    "original_platform_restarted": false
+  },
+  "formal_status_counts": {
+    "task_count": 24,
+    "run_count": 204,
+    "event_count": 60,
+    "message_count": 642,
+    "trace_count": 16908,
+    "pending_tasks": 0,
+    "running_tasks": 0,
+    "pending_events": 0
+  },
+  "source_snapshots": {
+    "/private/tmp/objective-review-continuation-20261002-L3L7mW": {
+      "state": [
+        "waiting_acceptance",
+        "verify_product",
+        73,
+        31445,
+        "http://127.0.0.1:61626"
+      ],
+      "database_sha256": "4c51c51f8f7074459cca0fb774efaa42cf2a0fc8fb3876b49bbbfd87eb7a8f71",
+      "product_hashes": {
+        "product/implementation.md": "6a6acd8f4b47cd56daf860d9bf67a97764338eed29cfc080b4f82a8fe9ff66c0",
+        "product/index.html": "117615e0bb57a8357d48ae66478b2df59095953536fd7d9cb3118d331c5c8cbc",
+        "product/styles.css": "3fe7f65b9bc0cbb71bba5695db0ce05a5e347b09db67593a5269dda62cbf3f11",
+        "product/product.test.js": "ebefdc5a41cd42305b5e48bcc50c8ce2186ebe70ea67669a30263cc1e5119d43",
+        "product/README.md": "09c1b429c4da1f99152e907e270f993fc966a0d9cc901c65c1490ee1201bf1a6",
+        "product/main.js": "458ee3d56050db9b7f4a3abaede6071fef87476a150c54d0fce97c2d52ff43a4",
+        "product/verify_product.py": "e5451c5eec361527ec51a1c743ff6dcf0504e538773e9a76b75b03a3069e766d",
+        "product/src/tasks/tasks.test.js": "580aebe3de2fe8054fcedef40e3b4179b9cafe21cd094cc96c65bf0858a59f9b",
+        "product/src/tasks/tasks.js": "349eb19396195ff55cb36f5dae814b6f89053aceecd54e645d669b034dc059a6",
+        "product/src/materials/materials.js": "91ae3f0ae4fd4acfccb63edef4bd4d398f5a713bdd6f4375414e502b5ada89f2",
+        "product/src/materials/materials.test.js": "335a30b0529e7a4697384ba259ae33d93f83317303a27e5a8e14b1a4b597459c",
+        "product/src/app/app.orchestrator.js": "b0a0158a96b9289347ea0c49aa5629a7a4d9e125e73f434984598d4b7737547c",
+        "product/src/shared/shared.test.js": "a0ad5527ba925ff4b06be78f6122bf845daa651d6e2158efb39ca4c4d0ad666b",
+        "product/src/shared/shared.js": "da42e3cf86280c180e7c6fa2b747096f2fe22962528f4cfa6a86cee3ceebb849",
+        "product/src/storage/storage.test.js": "3f9158a7be5a9b35a1f2e4abeb049055d3dc983ef1805d191d8df0e2cd60470d",
+        "product/src/storage/storage.js": "8e45d3f1427b254abc9dd35a36fe9e7b5be65deee006e7f8295943b4c9b71e2e",
+        "product/src/workbench/workbench.test.js": "0b9ebced56e8f67c361f2ea65fadd1503739240be9df367d6e8e3488f0cff0ee",
+        "product/src/workbench/workbench.js": "7de6fa9ba42f35baf3244519083a519471fb6767a7abb1316d8cd0f358a14116",
+        "product/src/topics/topics.test.js": "abada77cc13ad33a2e4d612d22fc8ee7e1fdb0e456f83df9de3ea734669ef1c9",
+        "product/src/topics/topics.js": "da657162b06cc97376000266bdc1c7d4c0d73643319dcb30ec14bdc1912a1e9a"
+      },
+      "goals_sha256": "60652a635534e39a40df381cc655b5acc836817c908a3b277b8a4ef8fb8c844d"
+    },
+    "/private/tmp/context-slimming-delivery-real-20261003-5bjwjrk4": {
+      "state": [
+        "failed",
+        "start_product",
+        67,
+        9931,
+        "http://127.0.0.1:64479"
+      ],
+      "database_sha256": "ebeb9ccd6abd49ef9362ce18d95f56b99985a993a004bb56428222b7156316d4",
+      "product_hashes": {
+        "product/implementation.md": "6a6acd8f4b47cd56daf860d9bf67a97764338eed29cfc080b4f82a8fe9ff66c0",
+        "product/index.html": "121ddf30d5598e24c65e75bfb55e70e7f18b552c2cf58afed90378c6ba72b90d",
+        "product/styles.css": "3fe7f65b9bc0cbb71bba5695db0ce05a5e347b09db67593a5269dda62cbf3f11",
+        "product/product.test.js": "f9d9c01f781738ade319afe42e9c5550ea768f3ff90e7ae1971bd4101e5210d7",
+        "product/README.md": "09c1b429c4da1f99152e907e270f993fc966a0d9cc901c65c1490ee1201bf1a6",
+        "product/main.js": "458ee3d56050db9b7f4a3abaede6071fef87476a150c54d0fce97c2d52ff43a4",
+        "product/verify_product.py": "aaf096410a413f870287f2725937f01efc643671857c3ec030ca1e178d98d199",
+        "product/src/tasks/tasks.test.js": "741545163d38aecf3de033da4cc49cb2752d82d845a28afa807dbded11c14d4f",
+        "product/src/tasks/tasks.js": "349eb19396195ff55cb36f5dae814b6f89053aceecd54e645d669b034dc059a6",
+        "product/src/materials/materials.js": "91ae3f0ae4fd4acfccb63edef4bd4d398f5a713bdd6f4375414e502b5ada89f2",
+        "product/src/materials/materials.test.js": "335a30b0529e7a4697384ba259ae33d93f83317303a27e5a8e14b1a4b597459c",
+        "product/src/app/app.orchestrator.js": "b0a0158a96b9289347ea0c49aa5629a7a4d9e125e73f434984598d4b7737547c",
+        "product/src/shared/shared.test.js": "a0ad5527ba925ff4b06be78f6122bf845daa651d6e2158efb39ca4c4d0ad666b",
+        "product/src/shared/shared.js": "da42e3cf86280c180e7c6fa2b747096f2fe22962528f4cfa6a86cee3ceebb849",
+        "product/src/storage/storage.test.js": "3f9158a7be5a9b35a1f2e4abeb049055d3dc983ef1805d191d8df0e2cd60470d",
+        "product/src/storage/storage.js": "8e45d3f1427b254abc9dd35a36fe9e7b5be65deee006e7f8295943b4c9b71e2e",
+        "product/src/workbench/workbench.test.js": "0b9ebced56e8f67c361f2ea65fadd1503739240be9df367d6e8e3488f0cff0ee",
+        "product/src/workbench/workbench.js": "7de6fa9ba42f35baf3244519083a519471fb6767a7abb1316d8cd0f358a14116",
+        "product/src/topics/topics.test.js": "abada77cc13ad33a2e4d612d22fc8ee7e1fdb0e456f83df9de3ea734669ef1c9",
+        "product/src/topics/topics.js": "da657162b06cc97376000266bdc1c7d4c0d73643319dcb30ec14bdc1912a1e9a"
+      },
+      "goals_sha256": "7ed6484886bcaa46bdb0b787372677790ae352e5c3a54a55cffa4d9ce97209c9"
+    },
+    "/private/tmp/context-slimming-deepseek-real-20261003-276n23ur": {
+      "state": [
+        "running",
+        "develop",
+        60,
+        2605,
+        "http://127.0.0.1:61626"
+      ],
+      "database_sha256": "25c3105edfa36915772446bf195b18af11a7db3025fa4c7e6a6c49d4bf7ffc14",
+      "product_hashes": {
+        "product/implementation.md": "6a6acd8f4b47cd56daf860d9bf67a97764338eed29cfc080b4f82a8fe9ff66c0",
+        "product/index.html": "121ddf30d5598e24c65e75bfb55e70e7f18b552c2cf58afed90378c6ba72b90d",
+        "product/styles.css": "3fe7f65b9bc0cbb71bba5695db0ce05a5e347b09db67593a5269dda62cbf3f11",
+        "product/product.test.js": "f9d9c01f781738ade319afe42e9c5550ea768f3ff90e7ae1971bd4101e5210d7",
+        "product/README.md": "09c1b429c4da1f99152e907e270f993fc966a0d9cc901c65c1490ee1201bf1a6",
+        "product/main.js": "458ee3d56050db9b7f4a3abaede6071fef87476a150c54d0fce97c2d52ff43a4",
+        "product/verify_product.py": "aaf096410a413f870287f2725937f01efc643671857c3ec030ca1e178d98d199",
+        "product/src/tasks/tasks.test.js": "741545163d38aecf3de033da4cc49cb2752d82d845a28afa807dbded11c14d4f",
+        "product/src/tasks/tasks.js": "349eb19396195ff55cb36f5dae814b6f89053aceecd54e645d669b034dc059a6",
+        "product/src/materials/materials.js": "91ae3f0ae4fd4acfccb63edef4bd4d398f5a713bdd6f4375414e502b5ada89f2",
+        "product/src/materials/materials.test.js": "335a30b0529e7a4697384ba259ae33d93f83317303a27e5a8e14b1a4b597459c",
+        "product/src/app/app.orchestrator.js": "b0a0158a96b9289347ea0c49aa5629a7a4d9e125e73f434984598d4b7737547c",
+        "product/src/shared/shared.test.js": "a0ad5527ba925ff4b06be78f6122bf845daa651d6e2158efb39ca4c4d0ad666b",
+        "product/src/shared/shared.js": "da42e3cf86280c180e7c6fa2b747096f2fe22962528f4cfa6a86cee3ceebb849",
+        "product/src/storage/storage.test.js": "3f9158a7be5a9b35a1f2e4abeb049055d3dc983ef1805d191d8df0e2cd60470d",
+        "product/src/storage/storage.js": "8e45d3f1427b254abc9dd35a36fe9e7b5be65deee006e7f8295943b4c9b71e2e",
+        "product/src/workbench/workbench.test.js": "0b9ebced56e8f67c361f2ea65fadd1503739240be9df367d6e8e3488f0cff0ee",
+        "product/src/workbench/workbench.js": "7de6fa9ba42f35baf3244519083a519471fb6767a7abb1316d8cd0f358a14116",
+        "product/src/topics/topics.test.js": "abada77cc13ad33a2e4d612d22fc8ee7e1fdb0e456f83df9de3ea734669ef1c9",
+        "product/src/topics/topics.js": "da657162b06cc97376000266bdc1c7d4c0d73643319dcb30ec14bdc1912a1e9a"
+      },
+      "goals_sha256": "7ed6484886bcaa46bdb0b787372677790ae352e5c3a54a55cffa4d9ce97209c9"
+    }
+  },
+  "real_http_calls": 0,
+  "reported_new_tokens": 0,
+  "real_model_convergence_verified": false,
+  "failed_task_resumed": false,
+  "user_accepted": false,
+  "temporary_evidence_root": "/private/tmp/planner-evidence-reuse-fix-20261003-pcsu1moo"
+}

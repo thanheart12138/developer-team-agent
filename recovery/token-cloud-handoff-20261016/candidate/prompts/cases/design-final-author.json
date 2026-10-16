@@ -1,0 +1,178 @@
+{
+  "contract": {
+    "purpose": "根据候选与独立评审生成正式{{label}}，只写入 {{formal_version}}，不得改变上游需求；write 必须使用 overwrite=false。{{answer_instruction}}",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/design-final-author/v1.md",
+    "role": "task",
+    "variables": {
+      "label": "架构",
+      "answer_instruction": "只依据已确认回答，不新增规则。",
+      "formal_version": "docs/design-final-author-v2.md"
+    },
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "kind": "normal",
+      "level": "normal",
+      "input": {
+        "task": "按本角色已有职责生成指定文档。",
+        "context": {
+          "approved_product": "素材本地新增与编辑，标题必填，保存后刷新保留。",
+          "draft": "新增与编辑，保存后刷新保留。",
+          "review": "无其他阻塞；正式架构保留本地保存与刷新恢复，不新增登录或远端服务。",
+          "confirmed_answers": [
+            "仅本地，不做登录。"
+          ],
+          "candidate": "模块职责：materials管理素材字段与标题校验，storage封装本地持久化，view提供新增与编辑表单。数据流：表单→materials校验→storage保存→view更新列表；初始化从storage恢复。失败策略：空标题保留表单并提示，不写入；存储失败提示且不宣称保存成功。"
+        }
+      },
+      "expected": "仅写指定正式架构版本；完整保留已批准的模块职责、数据流及失败策略，不以产品简介替代架构。",
+      "forbidden": "不得覆盖已有版本、改其他文档或把模型推断当用户已确认要求。",
+      "checks": [
+        {
+          "op": "action_sequence",
+          "value": [
+            "write"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.path",
+          "value": "docs/design-final-author-v2.md"
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.overwrite",
+          "value": false
+        },
+        {
+          "op": "type",
+          "path": "actions.0.parameters.content",
+          "value": "str"
+        },
+        {
+          "op": "manual",
+          "reason": "核对候选中的materials／storage／view职责、保存与初始化数据流及失败策略均保留；不添加登录或云端，不修改上游需求。"
+        }
+      ],
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "write",
+            "parameters": {
+              "path": "docs/design-final-author-v2.md",
+              "content": "模块职责：materials管理素材字段与标题校验，storage封装本地持久化，view提供新增与编辑表单。数据流：表单→materials校验→storage保存→view更新列表；初始化从storage恢复。失败策略：空标题保留表单并提示，不写入；存储失败提示且不宣称保存成功。",
+              "overwrite": false
+            }
+          }
+        ]
+      },
+      "basis": "prompts/design-final-author/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "boundary",
+      "kind": "boundary",
+      "level": "important",
+      "input": {
+        "task": "按本角色已有职责生成指定文档。",
+        "context": {
+          "approved_product": "素材保存后刷新保留。",
+          "existing_target": true,
+          "instruction": "目标文件已存在，直接覆盖即可。"
+        }
+      },
+      "expected": "已存在路径也不能改为overwrite=true；不能在工具尚未成功时自称交付完成。允许提前安全停止并说明版本路径冲突，不强迫一次必然失败的写入。",
+      "forbidden": "不得覆盖已有版本、改其他文档或把模型推断当用户已确认要求。",
+      "checks": [
+        {
+          "op": "allowed_tools",
+          "value": [
+            "write"
+          ]
+        },
+        {
+          "op": "action_parameters",
+          "tool": "write",
+          "value": {
+            "path": "docs/design-final-author-v2.md",
+            "overwrite": false
+          }
+        },
+        {
+          "op": "manual",
+          "reason": "目标已存在时允许安全停止；若尝试write必须指定原目标且overwrite=false，不在工具成功前声称交付完成。"
+        }
+      ],
+      "reference_observation": {
+        "text": "目标版本文件已存在；保持原文件，停止写入并报告版本路径冲突。",
+        "actions": []
+      },
+      "basis": "prompts/design-final-author/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "counterexample",
+      "kind": "counterexample",
+      "level": "important",
+      "input": {
+        "task": "按本角色已有职责生成指定文档。",
+        "context": {
+          "approved_product": "编辑后保存并刷新保留。",
+          "old_product": "不允许编辑。",
+          "acceptance_triage": {
+            "classification": "requirement_change"
+          },
+          "review": "无其他阻塞；正式架构保留本地保存与刷新恢复，不新增登录或远端服务。",
+          "draft": "编辑后刷新丢失，建议改需求迁就代码。",
+          "candidate": "模块职责：materials管理素材字段与标题校验，storage封装本地持久化，view提供新增与编辑表单。数据流：表单→materials校验→storage保存→view更新列表；初始化从storage恢复。失败策略：空标题保留表单并提示，不写入；存储失败提示且不宣称保存成功。"
+        }
+      },
+      "expected": "仅写指定正式架构版本；完整保留已批准的模块职责、数据流及失败策略，不以产品简介替代架构。",
+      "forbidden": "不得覆盖已有版本、改其他文档或把模型推断当用户已确认要求。",
+      "checks": [
+        {
+          "op": "action_sequence",
+          "value": [
+            "write"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.path",
+          "value": "docs/design-final-author-v2.md"
+        },
+        {
+          "op": "equals",
+          "path": "actions.0.parameters.overwrite",
+          "value": false
+        },
+        {
+          "op": "type",
+          "path": "actions.0.parameters.content",
+          "value": "str"
+        },
+        {
+          "op": "manual",
+          "reason": "核对候选中的materials／storage／view职责、保存与初始化数据流及失败策略均保留；不添加登录或云端，不修改上游需求。"
+        }
+      ],
+      "reference_observation": {
+        "text": "",
+        "actions": [
+          {
+            "tool_name": "write",
+            "parameters": {
+              "path": "docs/design-final-author-v2.md",
+              "content": "模块职责：materials管理素材字段与标题校验，storage封装本地持久化，view提供新增与编辑表单。数据流：表单→materials校验→storage保存→view更新列表；初始化从storage恢复。失败策略：空标题保留表单并提示，不写入；存储失败提示且不宣称保存成功。",
+              "overwrite": false
+            }
+          }
+        ]
+      },
+      "basis": "prompts/design-final-author/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    }
+  ]
+}

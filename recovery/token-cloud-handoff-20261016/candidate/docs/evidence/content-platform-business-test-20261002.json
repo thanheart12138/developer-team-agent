@@ -1,0 +1,921 @@
+{
+  "scope": "generated_product_business_test_on_macos_chrome",
+  "verdict": "core_business_checks_passed_with_unfixed_display_observations",
+  "result": {
+    "outcome": "functional_acceptance_passed",
+    "url": "http://127.0.0.1:61626",
+    "records": [
+      {
+        "name": "干净浏览器启动与默认工作台",
+        "requirement": "3.1",
+        "passed": true,
+        "expected": [
+          0,
+          0,
+          0
+        ],
+        "actual": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "name": "四区域导航不写入业务数据",
+        "requirement": "1.3、3.2",
+        "passed": true,
+        "expected": {},
+        "actual": {}
+      },
+      {
+        "name": "素材空标题阻止保存且保留输入",
+        "requirement": "3.2",
+        "passed": true,
+        "expected": "零写入、保留笔记、明确提示",
+        "actual": {
+          "note": "空标题失败时仍保留笔记",
+          "message": "「标题」为必填项",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      {
+        "name": "素材修正标题后正常保存",
+        "requirement": "3.2",
+        "passed": true,
+        "expected": [
+          1,
+          0,
+          0
+        ],
+        "actual": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "name": "三条素材与来源链接原样保存",
+        "requirement": "3.1、D7",
+        "passed": true,
+        "expected": [
+          3,
+          0,
+          0
+        ],
+        "actual": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "name": "来源链接打开入口指向保存值",
+        "requirement": "1.3",
+        "passed": true,
+        "expected": "https://example.invalid/a?q=1&x=2",
+        "actual": "https://example.invalid/a?q=1&x=2"
+      },
+      {
+        "name": "标题关键词即时检索且忽略大小写",
+        "requirement": "3.1、D6",
+        "passed": true,
+        "expected": "仅素材 A",
+        "actual": "素材 A ALPHAhttps://example.invalid/a?q=1&x=2空标题失败时仍保留笔记编辑删除"
+      },
+      {
+        "name": "素材显式编辑保存不增加记录",
+        "requirement": "原目标 E4-1、3.1",
+        "passed": true,
+        "expected": "笔记更新、仍三条",
+        "actual": [
+          {
+            "id": "m-1-1-io91xr",
+            "title": "素材 A ALPHA",
+            "sourceUrl": "https://example.invalid/a?q=1&x=2",
+            "note": "已编辑笔记 ALPHA",
+            "createdAt": "2026-10-02T13:38:59.480Z",
+            "updatedAt": "2026-10-02T13:38:59.647Z"
+          },
+          {
+            "id": "m-2-2-gxif9y",
+            "title": "素材 B BETA",
+            "sourceUrl": "",
+            "note": "笔记 B",
+            "createdAt": "2026-10-02T13:38:59.531Z",
+            "updatedAt": "2026-10-02T13:38:59.531Z"
+          },
+          {
+            "id": "m-3-3-icoukf",
+            "title": "素材 C GAMMA",
+            "sourceUrl": "",
+            "note": "关键笔记 C",
+            "createdAt": "2026-10-02T13:38:59.563Z",
+            "updatedAt": "2026-10-02T13:38:59.563Z"
+          }
+        ]
+      },
+      {
+        "name": "笔记关键词检索",
+        "requirement": "D6",
+        "passed": true,
+        "expected": "素材 C",
+        "actual": "素材 C GAMMA关键笔记 C编辑删除"
+      },
+      {
+        "name": "清空检索显示全部素材",
+        "requirement": "D6",
+        "passed": true,
+        "expected": 3,
+        "actual": 3
+      },
+      {
+        "name": "取消素材编辑不保存",
+        "requirement": "显式保存约束",
+        "passed": true,
+        "expected": {
+          "contentTool.v1.materials": "[{\"id\":\"m-1-1-io91xr\",\"title\":\"素材 A ALPHA\",\"sourceUrl\":\"https://example.invalid/a?q=1&x=2\",\"note\":\"已编辑笔记 ALPHA\",\"createdAt\":\"2026-10-02T13:38:59.480Z\",\"updatedAt\":\"2026-10-02T13:38:59.647Z\"},{\"id\":\"m-2-2-gxif9y\",\"title\":\"素材 B BETA\",\"sourceUrl\":\"\",\"note\":\"笔记 B\",\"createdAt\":\"2026-10-02T13:38:59.531Z\",\"updatedAt\":\"2026-10-02T13:38:59.531Z\"},{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]"
+        },
+        "actual": {
+          "contentTool.v1.materials": "[{\"id\":\"m-1-1-io91xr\",\"title\":\"素材 A ALPHA\",\"sourceUrl\":\"https://example.invalid/a?q=1&x=2\",\"note\":\"已编辑笔记 ALPHA\",\"createdAt\":\"2026-10-02T13:38:59.480Z\",\"updatedAt\":\"2026-10-02T13:38:59.647Z\"},{\"id\":\"m-2-2-gxif9y\",\"title\":\"素材 B BETA\",\"sourceUrl\":\"\",\"note\":\"笔记 B\",\"createdAt\":\"2026-10-02T13:38:59.531Z\",\"updatedAt\":\"2026-10-02T13:38:59.531Z\"},{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]"
+        }
+      },
+      {
+        "name": "编辑素材空标题不写入并保留输入",
+        "requirement": "3.2",
+        "passed": true,
+        "expected": "零写入、保留笔记",
+        "actual": {
+          "counts": [
+            3,
+            0,
+            0
+          ],
+          "note": "编辑失败保留的笔记"
+        }
+      },
+      {
+        "name": "素材标题和来源可编辑且错误后可恢复",
+        "requirement": "1.3、3.2、D7",
+        "passed": true,
+        "expected": "三条、标题与任意来源原样保存",
+        "actual": {
+          "id": "m-2-2-gxif9y",
+          "title": "素材 B 已改 BETA",
+          "sourceUrl": "来源说明，不要求 URL 格式",
+          "note": "编辑失败保留的笔记",
+          "createdAt": "2026-10-02T13:38:59.531Z",
+          "updatedAt": "2026-10-02T13:38:59.847Z"
+        }
+      },
+      {
+        "name": "素材编辑结果刷新保留",
+        "requirement": "原目标 E4-1",
+        "passed": true,
+        "expected": "已编辑笔记 ALPHA",
+        "actual": "已编辑笔记 ALPHA"
+      },
+      {
+        "name": "选题空标题阻止保存且保留角度",
+        "requirement": "3.2",
+        "passed": true,
+        "expected": "零写入、保留角度",
+        "actual": {
+          "counts": [
+            3,
+            0,
+            0
+          ],
+          "angle": "失败时保留角度"
+        }
+      },
+      {
+        "name": "标题修正后正常保存两个选题、默认中优先级",
+        "requirement": "3.1、3.2、D2",
+        "passed": true,
+        "expected": [
+          3,
+          2,
+          0
+        ],
+        "actual": [
+          {
+            "id": "t-1-1-pue5we",
+            "title": "选题 A",
+            "angle": "失败时保留角度",
+            "priority": "medium",
+            "materialIds": [],
+            "createdAt": "2026-10-02T13:39:00.081Z",
+            "updatedAt": "2026-10-02T13:39:00.081Z"
+          },
+          {
+            "id": "t-2-2-90xhxo",
+            "title": "选题 B",
+            "angle": "角度 B",
+            "priority": "medium",
+            "materialIds": [],
+            "createdAt": "2026-10-02T13:39:00.114Z",
+            "updatedAt": "2026-10-02T13:39:00.114Z"
+          }
+        ]
+      },
+      {
+        "name": "选题角度与优先级显式编辑不增记录",
+        "requirement": "原目标 E4-1",
+        "passed": true,
+        "expected": "两条、高优先级、角度更新",
+        "actual": [
+          {
+            "id": "t-1-1-pue5we",
+            "title": "选题 A 已改",
+            "angle": "已编辑角度",
+            "priority": "high",
+            "materialIds": [],
+            "createdAt": "2026-10-02T13:39:00.081Z",
+            "updatedAt": "2026-10-02T13:39:00.180Z"
+          },
+          {
+            "id": "t-2-2-90xhxo",
+            "title": "选题 B",
+            "angle": "角度 B",
+            "priority": "medium",
+            "materialIds": [],
+            "createdAt": "2026-10-02T13:39:00.114Z",
+            "updatedAt": "2026-10-02T13:39:00.114Z"
+          }
+        ]
+      },
+      {
+        "name": "选题角度及优先级刷新保留",
+        "requirement": "原目标 E4-1",
+        "passed": true,
+        "expected": "高、已编辑角度",
+        "actual": {
+          "id": "t-1-1-pue5we",
+          "title": "选题 A 已改",
+          "angle": "已编辑角度",
+          "priority": "high",
+          "materialIds": [],
+          "createdAt": "2026-10-02T13:39:00.081Z",
+          "updatedAt": "2026-10-02T13:39:00.180Z"
+        }
+      },
+      {
+        "name": "选题取消编辑保留原标题角度优先级",
+        "requirement": "显式保存约束",
+        "passed": true,
+        "expected": {
+          "contentTool.v1.materials": "[{\"id\":\"m-1-1-io91xr\",\"title\":\"素材 A ALPHA\",\"sourceUrl\":\"https://example.invalid/a?q=1&x=2\",\"note\":\"已编辑笔记 ALPHA\",\"createdAt\":\"2026-10-02T13:38:59.480Z\",\"updatedAt\":\"2026-10-02T13:38:59.647Z\"},{\"id\":\"m-2-2-gxif9y\",\"title\":\"素材 B BETA\",\"sourceUrl\":\"来源说明，不要求 URL 格式\",\"note\":\"编辑失败保留的笔记\",\"createdAt\":\"2026-10-02T13:38:59.531Z\",\"updatedAt\":\"2026-10-02T13:38:59.913Z\"},{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]",
+          "contentTool.v1.topics": "[{\"id\":\"t-1-1-pue5we\",\"title\":\"选题 A 已改\",\"angle\":\"已编辑角度\",\"priority\":\"high\",\"materialIds\":[],\"createdAt\":\"2026-10-02T13:39:00.081Z\",\"updatedAt\":\"2026-10-02T13:39:00.180Z\"},{\"id\":\"t-2-2-90xhxo\",\"title\":\"选题 B\",\"angle\":\"角度 B\",\"priority\":\"medium\",\"materialIds\":[],\"createdAt\":\"2026-10-02T13:39:00.114Z\",\"updatedAt\":\"2026-10-02T13:39:00.114Z\"}]"
+        },
+        "actual": {
+          "contentTool.v1.materials": "[{\"id\":\"m-1-1-io91xr\",\"title\":\"素材 A ALPHA\",\"sourceUrl\":\"https://example.invalid/a?q=1&x=2\",\"note\":\"已编辑笔记 ALPHA\",\"createdAt\":\"2026-10-02T13:38:59.480Z\",\"updatedAt\":\"2026-10-02T13:38:59.647Z\"},{\"id\":\"m-2-2-gxif9y\",\"title\":\"素材 B BETA\",\"sourceUrl\":\"来源说明，不要求 URL 格式\",\"note\":\"编辑失败保留的笔记\",\"createdAt\":\"2026-10-02T13:38:59.531Z\",\"updatedAt\":\"2026-10-02T13:38:59.913Z\"},{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]",
+          "contentTool.v1.topics": "[{\"id\":\"t-1-1-pue5we\",\"title\":\"选题 A 已改\",\"angle\":\"已编辑角度\",\"priority\":\"high\",\"materialIds\":[],\"createdAt\":\"2026-10-02T13:39:00.081Z\",\"updatedAt\":\"2026-10-02T13:39:00.180Z\"},{\"id\":\"t-2-2-90xhxo\",\"title\":\"选题 B\",\"angle\":\"角度 B\",\"priority\":\"medium\",\"materialIds\":[],\"createdAt\":\"2026-10-02T13:39:00.114Z\",\"updatedAt\":\"2026-10-02T13:39:00.114Z\"}]"
+        }
+      },
+      {
+        "name": "编辑选题空标题不写入并保留角度",
+        "requirement": "3.2",
+        "passed": true,
+        "expected": "零写入、保留角度",
+        "actual": {
+          "counts": [
+            3,
+            2,
+            0
+          ],
+          "angle": "编辑失败保留的角度"
+        }
+      },
+      {
+        "name": "选题低优先级保存及错误恢复",
+        "requirement": "1.3、3.2",
+        "passed": true,
+        "expected": "低优先级、角度更新、仍两条",
+        "actual": {
+          "id": "t-2-2-90xhxo",
+          "title": "选题 B",
+          "angle": "编辑失败保留的角度",
+          "priority": "low",
+          "materialIds": [],
+          "createdAt": "2026-10-02T13:39:00.114Z",
+          "updatedAt": "2026-10-02T13:39:00.414Z"
+        }
+      },
+      {
+        "name": "一素材关联两个选题、每选题关联多素材",
+        "requirement": "3.1、1.4",
+        "passed": true,
+        "expected": "两个选题各两条关联、共享素材 A",
+        "actual": [
+          {
+            "id": "t-1-1-pue5we",
+            "title": "选题 A 已改",
+            "angle": "已编辑角度",
+            "priority": "high",
+            "materialIds": [
+              "m-1-1-io91xr",
+              "m-2-2-gxif9y"
+            ],
+            "createdAt": "2026-10-02T13:39:00.081Z",
+            "updatedAt": "2026-10-02T13:39:00.180Z"
+          },
+          {
+            "id": "t-2-2-90xhxo",
+            "title": "选题 B",
+            "angle": "编辑失败保留的角度",
+            "priority": "low",
+            "materialIds": [
+              "m-1-1-io91xr",
+              "m-3-3-icoukf"
+            ],
+            "createdAt": "2026-10-02T13:39:00.114Z",
+            "updatedAt": "2026-10-02T13:39:00.414Z"
+          }
+        ]
+      },
+      {
+        "name": "从选题创建任务并复制标题及来源素材",
+        "requirement": "3.1、1.4",
+        "passed": true,
+        "expected": "一任务、复制标题、两个来源素材",
+        "actual": {
+          "counts": [
+            3,
+            2,
+            1
+          ],
+          "title": "选题 A 已改",
+          "materials": "素材 A ALPHA\n素材 B BETA"
+        }
+      },
+      {
+        "name": "重复创建进入同一任务且不写入",
+        "requirement": "3.1、1.4",
+        "passed": true,
+        "expected": "同一任务、零写入",
+        "actual": {
+          "counts": [
+            3,
+            2,
+            1
+          ],
+          "task_id": "k-1-1-mu903f"
+        }
+      },
+      {
+        "name": "解除关联即时反映到来源任务、无关关系保留",
+        "requirement": "1.4、3.2",
+        "passed": true,
+        "expected": "任务来源仅 A，另一选题两关联不变",
+        "actual": {
+          "materials": "素材 A ALPHA",
+          "topics": [
+            {
+              "id": "t-1-1-pue5we",
+              "title": "选题 A 已改",
+              "angle": "已编辑角度",
+              "priority": "high",
+              "materialIds": [
+                "m-1-1-io91xr"
+              ],
+              "createdAt": "2026-10-02T13:39:00.081Z",
+              "updatedAt": "2026-10-02T13:39:00.180Z"
+            },
+            {
+              "id": "t-2-2-90xhxo",
+              "title": "选题 B",
+              "angle": "编辑失败保留的角度",
+              "priority": "low",
+              "materialIds": [
+                "m-1-1-io91xr",
+                "m-3-3-icoukf"
+              ],
+              "createdAt": "2026-10-02T13:39:00.114Z",
+              "updatedAt": "2026-10-02T13:39:00.414Z"
+            }
+          ]
+        }
+      },
+      {
+        "name": "任务标题、草稿、过去截止日与手动状态保存",
+        "requirement": "3.1、D3",
+        "passed": true,
+        "expected": "正确保存且来源选题不变",
+        "actual": {
+          "id": "k-1-1-mu903f",
+          "title": "内容任务 已改",
+          "draft": "纯文本草稿\n<b>不是富文本</b> & 测试",
+          "dueDate": "2026-10-01",
+          "status": "writing",
+          "topicId": "t-1-1-pue5we",
+          "createdAt": "2026-10-02T13:39:00.731Z",
+          "updatedAt": "2026-10-02T13:39:00.981Z"
+        }
+      },
+      {
+        "name": "任务空标题零写入且保留草稿",
+        "requirement": "3.2",
+        "passed": true,
+        "expected": "零写入、保留草稿",
+        "actual": {
+          "message": "「标题」为必填项",
+          "draft": "空标题失败时保留草稿"
+        }
+      },
+      {
+        "name": "任务纠正标题后正常保存",
+        "requirement": "3.2",
+        "passed": true,
+        "expected": "恢复正常、仍一任务",
+        "actual": {
+          "id": "k-1-1-mu903f",
+          "title": "内容任务 已改",
+          "draft": "空标题失败时保留草稿",
+          "dueDate": "2026-10-01",
+          "status": "writing",
+          "topicId": "t-1-1-pue5we",
+          "createdAt": "2026-10-02T13:39:00.731Z",
+          "updatedAt": "2026-10-02T13:39:01.065Z"
+        }
+      },
+      {
+        "name": "未完成、写作中及逾期计数准确",
+        "requirement": "3.1、D4",
+        "passed": true,
+        "expected": "一未完成、一逾期、一写作中",
+        "actual": {
+          "text": "未完成：1\n逾期：1\n待写作：0\n写作中：1\n待发布：0\n已发布：0",
+          "tasks": [
+            "内容任务 已改"
+          ],
+          "overdue_rows": 1
+        }
+      },
+      {
+        "name": "工作台可进入对应任务详情",
+        "requirement": "3.1",
+        "passed": true,
+        "expected": "正确详情",
+        "actual": "内容任务 已改"
+      },
+      {
+        "name": "清空截止日期后移出逾期但仍未完成",
+        "requirement": "D3、D4",
+        "passed": true,
+        "expected": "无截止日、一未完成、零逾期",
+        "actual": {
+          "text": "未完成：1\n逾期：0\n待写作：0\n写作中：1\n待发布：0\n已发布：0",
+          "tasks": [
+            "内容任务 已改"
+          ],
+          "overdue_rows": 0
+        }
+      },
+      {
+        "name": "截止日等于今天不逾期且可手动回到待写作",
+        "requirement": "1.4、D4",
+        "passed": true,
+        "expected": "今天不逾期、一待写作",
+        "actual": {
+          "text": "未完成：1\n逾期：0\n待写作：1\n写作中：0\n待发布：0\n已发布：0",
+          "tasks": [
+            "内容任务 已改"
+          ],
+          "overdue_rows": 0
+        }
+      },
+      {
+        "name": "未来截止日不逾期且仍列入未完成",
+        "requirement": "1.4、D4",
+        "passed": true,
+        "expected": "未来不逾期、一未完成",
+        "actual": {
+          "text": "未完成：1\n逾期：0\n待写作：1\n写作中：0\n待发布：0\n已发布：0",
+          "tasks": [
+            "内容任务 已改"
+          ],
+          "overdue_rows": 0
+        }
+      },
+      {
+        "name": "待发布状态手动切换与计数",
+        "requirement": "1.3、D4",
+        "passed": true,
+        "expected": "一待发布、一逾期",
+        "actual": {
+          "text": "未完成：1\n逾期：1\n待写作：0\n写作中：0\n待发布：1\n已发布：0",
+          "tasks": [
+            "内容任务 已改"
+          ],
+          "overdue_rows": 1
+        }
+      },
+      {
+        "name": "选题标题变化不修改已建任务标题",
+        "requirement": "1.4",
+        "passed": true,
+        "expected": "任务标题独立、来源展示更新",
+        "actual": {
+          "task_title": "内容任务 已改",
+          "source": "来源选题：选题 A 再改"
+        }
+      },
+      {
+        "name": "原生影响确认取消后所有数据不变",
+        "requirement": "3.2",
+        "passed": true,
+        "expected": "两选题影响提示、取消零写入",
+        "actual": {
+          "dialog": {
+            "type": "confirm",
+            "message": "有 2 个选题关联了该素材：选题 A 再改、选题 B。删除素材会解除这些关联，是否继续？",
+            "choice": "dismiss"
+          },
+          "counts": [
+            3,
+            2,
+            1
+          ]
+        }
+      },
+      {
+        "name": "确认删除共享素材保留选题任务并清除两侧关联",
+        "requirement": "3.1、1.4",
+        "passed": true,
+        "expected": "两素材、两选题、一任务，A 关联全部解除",
+        "actual": {
+          "materials": [
+            {
+              "id": "m-2-2-gxif9y",
+              "title": "素材 B BETA",
+              "sourceUrl": "来源说明，不要求 URL 格式",
+              "note": "编辑失败保留的笔记",
+              "createdAt": "2026-10-02T13:38:59.531Z",
+              "updatedAt": "2026-10-02T13:38:59.913Z"
+            },
+            {
+              "id": "m-3-3-icoukf",
+              "title": "素材 C GAMMA",
+              "sourceUrl": "",
+              "note": "关键笔记 C",
+              "createdAt": "2026-10-02T13:38:59.563Z",
+              "updatedAt": "2026-10-02T13:38:59.563Z"
+            }
+          ],
+          "topics": [
+            {
+              "id": "t-1-1-pue5we",
+              "title": "选题 A 再改",
+              "angle": "已编辑角度",
+              "priority": "high",
+              "materialIds": [],
+              "createdAt": "2026-10-02T13:39:00.081Z",
+              "updatedAt": "2026-10-02T13:39:01.615Z"
+            },
+            {
+              "id": "t-2-2-90xhxo",
+              "title": "选题 B",
+              "angle": "编辑失败保留的角度",
+              "priority": "low",
+              "materialIds": [
+                "m-3-3-icoukf"
+              ],
+              "createdAt": "2026-10-02T13:39:00.114Z",
+              "updatedAt": "2026-10-02T13:39:00.414Z"
+            }
+          ],
+          "tasks": [
+            {
+              "id": "k-1-1-mu903f",
+              "title": "内容任务 已改",
+              "draft": "空标题失败时保留草稿",
+              "dueDate": "2026-10-01",
+              "status": "review",
+              "topicId": "t-1-1-pue5we",
+              "createdAt": "2026-10-02T13:39:00.731Z",
+              "updatedAt": "2026-10-02T13:39:01.480Z"
+            }
+          ]
+        }
+      },
+      {
+        "name": "删除后来源选题与任务仍可查看、无残留素材",
+        "requirement": "3.1",
+        "passed": true,
+        "expected": "任务可用、来源存在、关联为空",
+        "actual": {
+          "source": "来源选题：选题 A 再改",
+          "materials": ""
+        }
+      },
+      {
+        "name": "来源选题有任务时删除被阻止",
+        "requirement": "3.2",
+        "passed": true,
+        "expected": "零写入、说明任务限制",
+        "actual": {
+          "counts": [
+            2,
+            2,
+            1
+          ],
+          "message": "该选题已创建内容任务，无法删除；请先处理对应任务再删除选题。"
+        }
+      },
+      {
+        "name": "阻止删除后仍能删除无任务选题且不额外确认",
+        "requirement": "3.2、1.4",
+        "passed": true,
+        "expected": [
+          2,
+          1,
+          1
+        ],
+        "actual": [
+          2,
+          1,
+          1
+        ]
+      },
+      {
+        "name": "删除未关联素材不额外确认且无关模块保留",
+        "requirement": "1.4、3.2",
+        "passed": true,
+        "expected": [
+          1,
+          1,
+          1
+        ],
+        "actual": [
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "name": "刷新保留全部数据、状态及剩余关系",
+        "requirement": "3.1",
+        "passed": true,
+        "expected": {
+          "contentTool.v1.materials": "[{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]",
+          "contentTool.v1.tasks": "[{\"id\":\"k-1-1-mu903f\",\"title\":\"内容任务 已改\",\"draft\":\"空标题失败时保留草稿\",\"dueDate\":\"2026-10-01\",\"status\":\"review\",\"topicId\":\"t-1-1-pue5we\",\"createdAt\":\"2026-10-02T13:39:00.731Z\",\"updatedAt\":\"2026-10-02T13:39:01.480Z\"}]",
+          "contentTool.v1.topics": "[{\"id\":\"t-1-1-pue5we\",\"title\":\"选题 A 再改\",\"angle\":\"已编辑角度\",\"priority\":\"high\",\"materialIds\":[\"m-3-3-icoukf\"],\"createdAt\":\"2026-10-02T13:39:00.081Z\",\"updatedAt\":\"2026-10-02T13:39:01.615Z\"}]"
+        },
+        "actual": {
+          "contentTool.v1.materials": "[{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]",
+          "contentTool.v1.tasks": "[{\"id\":\"k-1-1-mu903f\",\"title\":\"内容任务 已改\",\"draft\":\"空标题失败时保留草稿\",\"dueDate\":\"2026-10-01\",\"status\":\"review\",\"topicId\":\"t-1-1-pue5we\",\"createdAt\":\"2026-10-02T13:39:00.731Z\",\"updatedAt\":\"2026-10-02T13:39:01.480Z\"}]",
+          "contentTool.v1.topics": "[{\"id\":\"t-1-1-pue5we\",\"title\":\"选题 A 再改\",\"angle\":\"已编辑角度\",\"priority\":\"high\",\"materialIds\":[\"m-3-3-icoukf\"],\"createdAt\":\"2026-10-02T13:39:00.081Z\",\"updatedAt\":\"2026-10-02T13:39:01.615Z\"}]"
+        }
+      },
+      {
+        "name": "同地址重启服务后磁盘数据逐字保留",
+        "requirement": "3.1",
+        "passed": true,
+        "expected": {
+          "contentTool.v1.materials": "[{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]",
+          "contentTool.v1.tasks": "[{\"id\":\"k-1-1-mu903f\",\"title\":\"内容任务 已改\",\"draft\":\"空标题失败时保留草稿\",\"dueDate\":\"2026-10-01\",\"status\":\"review\",\"topicId\":\"t-1-1-pue5we\",\"createdAt\":\"2026-10-02T13:39:00.731Z\",\"updatedAt\":\"2026-10-02T13:39:01.480Z\"}]",
+          "contentTool.v1.topics": "[{\"id\":\"t-1-1-pue5we\",\"title\":\"选题 A 再改\",\"angle\":\"已编辑角度\",\"priority\":\"high\",\"materialIds\":[\"m-3-3-icoukf\"],\"createdAt\":\"2026-10-02T13:39:00.081Z\",\"updatedAt\":\"2026-10-02T13:39:01.615Z\"}]"
+        },
+        "actual": {
+          "contentTool.v1.materials": "[{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]",
+          "contentTool.v1.tasks": "[{\"id\":\"k-1-1-mu903f\",\"title\":\"内容任务 已改\",\"draft\":\"空标题失败时保留草稿\",\"dueDate\":\"2026-10-01\",\"status\":\"review\",\"topicId\":\"t-1-1-pue5we\",\"createdAt\":\"2026-10-02T13:39:00.731Z\",\"updatedAt\":\"2026-10-02T13:39:01.480Z\"}]",
+          "contentTool.v1.topics": "[{\"id\":\"t-1-1-pue5we\",\"title\":\"选题 A 再改\",\"angle\":\"已编辑角度\",\"priority\":\"high\",\"materialIds\":[\"m-3-3-icoukf\"],\"createdAt\":\"2026-10-02T13:39:00.081Z\",\"updatedAt\":\"2026-10-02T13:39:01.615Z\"}]"
+        }
+      },
+      {
+        "name": "重启后来源素材与草稿仍可使用",
+        "requirement": "3.1",
+        "passed": true,
+        "expected": "草稿及剩余关联保留",
+        "actual": {
+          "draft": "空标题失败时保留草稿",
+          "materials": "素材 C GAMMA"
+        }
+      },
+      {
+        "name": "已发布任务移出未完成与逾期、发布计数保留",
+        "requirement": "3.1、D4",
+        "passed": true,
+        "expected": "零未完成、零逾期、一已发布、无待办",
+        "actual": {
+          "text": "未完成：0\n逾期：0\n待写作：0\n写作中：0\n待发布：0\n已发布：1",
+          "tasks": [],
+          "overdue_rows": 0
+        }
+      },
+      {
+        "name": "关闭页面后同一浏览器重新进入仍保留",
+        "requirement": "3.1",
+        "passed": true,
+        "expected": {
+          "contentTool.v1.materials": "[{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]",
+          "contentTool.v1.tasks": "[{\"id\":\"k-1-1-mu903f\",\"title\":\"内容任务 已改\",\"draft\":\"空标题失败时保留草稿\",\"dueDate\":\"2026-10-01\",\"status\":\"published\",\"topicId\":\"t-1-1-pue5we\",\"createdAt\":\"2026-10-02T13:39:00.731Z\",\"updatedAt\":\"2026-10-02T13:39:02.480Z\"}]",
+          "contentTool.v1.topics": "[{\"id\":\"t-1-1-pue5we\",\"title\":\"选题 A 再改\",\"angle\":\"已编辑角度\",\"priority\":\"high\",\"materialIds\":[\"m-3-3-icoukf\"],\"createdAt\":\"2026-10-02T13:39:00.081Z\",\"updatedAt\":\"2026-10-02T13:39:01.615Z\"}]"
+        },
+        "actual": {
+          "contentTool.v1.materials": "[{\"id\":\"m-3-3-icoukf\",\"title\":\"素材 C GAMMA\",\"sourceUrl\":\"\",\"note\":\"关键笔记 C\",\"createdAt\":\"2026-10-02T13:38:59.563Z\",\"updatedAt\":\"2026-10-02T13:38:59.563Z\"}]",
+          "contentTool.v1.tasks": "[{\"id\":\"k-1-1-mu903f\",\"title\":\"内容任务 已改\",\"draft\":\"空标题失败时保留草稿\",\"dueDate\":\"2026-10-01\",\"status\":\"published\",\"topicId\":\"t-1-1-pue5we\",\"createdAt\":\"2026-10-02T13:39:00.731Z\",\"updatedAt\":\"2026-10-02T13:39:02.480Z\"}]",
+          "contentTool.v1.topics": "[{\"id\":\"t-1-1-pue5we\",\"title\":\"选题 A 再改\",\"angle\":\"已编辑角度\",\"priority\":\"high\",\"materialIds\":[\"m-3-3-icoukf\"],\"createdAt\":\"2026-10-02T13:39:00.081Z\",\"updatedAt\":\"2026-10-02T13:39:01.615Z\"}]"
+        }
+      },
+      {
+        "name": "验收末尾重复打开任务仍幂等且功能可用",
+        "requirement": "3.1、3.2",
+        "passed": true,
+        "expected": [
+          1,
+          1,
+          1
+        ],
+        "actual": [
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "name": "验收期间无未处理页面异常或资源失败",
+        "requirement": "正常可用性",
+        "passed": true,
+        "expected": [],
+        "actual": []
+      }
+    ],
+    "failure": null,
+    "events": [
+      {
+        "console": "error",
+        "text": "Failed to load resource: the server responded with a status of 404 (File not found)"
+      }
+    ],
+    "dialogs": [
+      {
+        "type": "confirm",
+        "message": "有 2 个选题关联了该素材：选题 A 再改、选题 B。删除素材会解除这些关联，是否继续？",
+        "choice": "dismiss"
+      },
+      {
+        "type": "confirm",
+        "message": "有 2 个选题关联了该素材：选题 A 再改、选题 B。删除素材会解除这些关联，是否继续？",
+        "choice": "accept"
+      }
+    ],
+    "passed": 48,
+    "failed": 0,
+    "observed_data": {
+      "materials": [
+        {
+          "id": "m-3-3-icoukf",
+          "title": "素材 C GAMMA",
+          "sourceUrl": "",
+          "note": "关键笔记 C",
+          "createdAt": "2026-10-02T13:38:59.563Z",
+          "updatedAt": "2026-10-02T13:38:59.563Z"
+        }
+      ],
+      "topics": [
+        {
+          "id": "t-1-1-pue5we",
+          "title": "选题 A 再改",
+          "angle": "已编辑角度",
+          "priority": "high",
+          "materialIds": [
+            "m-3-3-icoukf"
+          ],
+          "createdAt": "2026-10-02T13:39:00.081Z",
+          "updatedAt": "2026-10-02T13:39:01.615Z"
+        }
+      ],
+      "tasks": [
+        {
+          "id": "k-1-1-mu903f",
+          "title": "内容任务 已改",
+          "draft": "空标题失败时保留草稿",
+          "dueDate": "2026-10-01",
+          "status": "published",
+          "topicId": "t-1-1-pue5we",
+          "createdAt": "2026-10-02T13:39:00.731Z",
+          "updatedAt": "2026-10-02T13:39:02.480Z"
+        }
+      ]
+    },
+    "product_hashes_unchanged": true,
+    "goal_ledger_unchanged": true,
+    "task_before": [
+      "waiting_acceptance",
+      "verify_product",
+      54,
+      92113
+    ],
+    "task_after": [
+      "waiting_acceptance",
+      "verify_product",
+      55,
+      2605
+    ],
+    "service": {
+      "url": "http://127.0.0.1:61626",
+      "pid": 2605,
+      "command": "python -c \"import runpy,socketserver,sys;socketserver.TCPServer.request_queue_size=128;sys.argv=['http.server','61626','--bind','127.0.0.1'];runpy.run_module('http.server',run_name='__main__')\"",
+      "product_root": "/private/tmp/objective-review-continuation-20261002-L3L7mW/workspace/1/product"
+    },
+    "restarted_pid": 2605,
+    "model_http_calls": 0,
+    "model_tokens": 0,
+    "generated_script_used": false,
+    "windows_verified": false,
+    "from_zero_unattended_verified": false,
+    "elapsed_seconds": 5.45
+  },
+  "baseline": {
+    "url": "http://127.0.0.1:61626",
+    "product_hashes": {
+      "implementation.md": "6a6acd8f4b47cd56daf860d9bf67a97764338eed29cfc080b4f82a8fe9ff66c0",
+      "index.html": "8f1ecf7ca950004ab5326c374f846a3fe0b40436e826304b0a51e71d52968725",
+      "styles.css": "3fe7f65b9bc0cbb71bba5695db0ce05a5e347b09db67593a5269dda62cbf3f11",
+      "product.test.js": "2f6b6437b7895fac25f9ac1378f4fde947aac25d0f0e2111aad407f2ae6b8cf5",
+      "README.md": "09c1b429c4da1f99152e907e270f993fc966a0d9cc901c65c1490ee1201bf1a6",
+      "main.js": "458ee3d56050db9b7f4a3abaede6071fef87476a150c54d0fce97c2d52ff43a4",
+      "verify_product.py": "626e260cf738c8c52a6ad934c2779741e23f1b5156def58a9fbdd6efc61cbf13",
+      "src/tasks/tasks.test.js": "1b19d423adc4f5d4b8e6207a8ac4173a53dbc4040cdc45babd4c31ceb80bd1fd",
+      "src/tasks/tasks.js": "2b7cfde52929ff599537fadb970384462a9e245337250398a6bdfa0c55b813db",
+      "src/materials/materials.js": "91ae3f0ae4fd4acfccb63edef4bd4d398f5a713bdd6f4375414e502b5ada89f2",
+      "src/materials/materials.test.js": "335a30b0529e7a4697384ba259ae33d93f83317303a27e5a8e14b1a4b597459c",
+      "src/app/app.orchestrator.js": "b0a0158a96b9289347ea0c49aa5629a7a4d9e125e73f434984598d4b7737547c",
+      "src/shared/shared.test.js": "a0ad5527ba925ff4b06be78f6122bf845daa651d6e2158efb39ca4c4d0ad666b",
+      "src/shared/shared.js": "da42e3cf86280c180e7c6fa2b747096f2fe22962528f4cfa6a86cee3ceebb849",
+      "src/storage/storage.test.js": "3f9158a7be5a9b35a1f2e4abeb049055d3dc983ef1805d191d8df0e2cd60470d",
+      "src/storage/storage.js": "8e45d3f1427b254abc9dd35a36fe9e7b5be65deee006e7f8295943b4c9b71e2e",
+      "src/workbench/workbench.test.js": "0b9ebced56e8f67c361f2ea65fadd1503739240be9df367d6e8e3488f0cff0ee",
+      "src/workbench/workbench.js": "7de6fa9ba42f35baf3244519083a519471fb6767a7abb1316d8cd0f358a14116",
+      "src/topics/topics.test.js": "abada77cc13ad33a2e4d612d22fc8ee7e1fdb0e456f83df9de3ea734669ef1c9",
+      "src/topics/topics.js": "da657162b06cc97376000266bdc1c7d4c0d73643319dcb30ec14bdc1912a1e9a"
+    },
+    "goal_sha256": "9ea969716b8ec53ce7d2cff5cae1082a72f68ce0310b8ddf9b05fb4a7a450afb",
+    "task": [
+      "waiting_acceptance",
+      "verify_product",
+      54,
+      92113
+    ],
+    "model_http_limit": 0
+  },
+  "supplemental_observations": {
+    "http_errors": [
+      {
+        "url": "http://127.0.0.1:61626/favicon.ico",
+        "status": 404
+      }
+    ],
+    "browser_log_errors": [
+      {
+        "source": "network",
+        "level": "error",
+        "text": "Failed to load resource: the server responded with a status of 404 (File not found)",
+        "timestamp": 1790948441525.147,
+        "url": "http://127.0.0.1:61626/favicon.ico",
+        "networkRequestId": "3442.13"
+      }
+    ],
+    "stale_error_observation": {
+      "invalid_message": "「标题」为必填项",
+      "after_valid_save": "「标题」为必填项",
+      "after_workbench_navigation": "「标题」为必填项",
+      "saved_task_title": "内容任务 已改",
+      "saved_task_status": "published",
+      "task_count": 1,
+      "valid_save_and_navigation_succeeded": true
+    }
+  },
+  "audit": {
+    "functional_acceptance": "passed",
+    "passed_records": 48,
+    "failed_records": 0,
+    "current_url": "http://127.0.0.1:61626",
+    "current_service_pid": 2605,
+    "worker_pid": 92087,
+    "isolated_task": [
+      "waiting_acceptance",
+      "verify_product",
+      55,
+      2605
+    ],
+    "product_20_files_unchanged": true,
+    "goal_ledger_unchanged": true,
+    "isolated_trace_events_unchanged": true,
+    "formal_snapshot_unchanged": true,
+    "formal_task_count": 24,
+    "formal_trace_count": 16908,
+    "model_http_calls": 0,
+    "model_tokens": 0,
+    "worker_log_bytes": 0,
+    "windows_verified": false,
+    "from_zero_unattended_verified": false,
+    "full_architecture_audited": false,
+    "user_final_acceptance_event_sent": false
+  }
+}

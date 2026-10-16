@@ -1,0 +1,773 @@
+{
+  "date": "2026-10-03",
+  "probe_root": "/private/tmp/context-slimming-deepseek-real-20261003-276n23ur",
+  "scope": "真实自测及显式提交即停，未执行后续阶段",
+  "http_limit": 12,
+  "http_calls": 11,
+  "usage": {
+    "prompt_tokens": 430992,
+    "completion_tokens": 43043,
+    "total_tokens": 474035
+  },
+  "old_handoff_http_calls": 9,
+  "old_handoff_usage": {
+    "prompt_tokens": 655008,
+    "completion_tokens": 23707,
+    "total_tokens": 678715
+  },
+  "total_token_reduction_percent": 30.16,
+  "input_token_reduction_percent": 34.2,
+  "output_token_increase_percent": 81.56,
+  "same_initial_twenty_product_hashes": true,
+  "same_initial_approved_documents": true,
+  "initial_protocol_entries": 27,
+  "final_protocol_entries": 49,
+  "protocol_checks": [
+    {
+      "http": 1,
+      "protocol_messages": 0,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 2,
+      "protocol_messages": 2,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 3,
+      "protocol_messages": 0,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 4,
+      "protocol_messages": 4,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 5,
+      "protocol_messages": 7,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 6,
+      "protocol_messages": 0,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 7,
+      "protocol_messages": 3,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 8,
+      "protocol_messages": 6,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 9,
+      "protocol_messages": 0,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 10,
+      "protocol_messages": 3,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    },
+    {
+      "http": 11,
+      "protocol_messages": 5,
+      "protocol_unchanged": true,
+      "original_goal_facts_unchanged": true,
+      "old_report_reference_valid": true
+    }
+  ],
+  "original_goal_ledger_unchanged": true,
+  "self_test_counts": {
+    "tests": 86,
+    "pass": 86,
+    "fail": 0,
+    "skipped": 0
+  },
+  "tested_files": 20,
+  "submitted_files": 15,
+  "self_test_and_submission_versions_current": true,
+  "self_test_protocol_reference_verified": true,
+  "tool_counts": {
+    "read": 12,
+    "replace": 8,
+    "exec": 3,
+    "run_unit_tests": 1,
+    "submit_unit_for_test": 1
+  },
+  "reads": [
+    {
+      "http": 1,
+      "path": "product/src/tasks/tasks.test.js",
+      "start_line": 700,
+      "covered_end_line": 748,
+      "sha256": "f335cbc9789fedf067c058786207d8460b058b7b14b6870436249595804eec72",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 3,
+      "path": "product/src/tasks/tasks.js",
+      "start_line": 380,
+      "covered_end_line": 621,
+      "sha256": "349eb19396195ff55cb36f5dae814b6f89053aceecd54e645d669b034dc059a6",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 3,
+      "path": "product/verify_product.py",
+      "start_line": 1,
+      "covered_end_line": 400,
+      "sha256": "aa94bc48928b4acdfca815f25085529783046dc4d13da939ce386a756a6b6d3a",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 3,
+      "path": "product/verify_product.py",
+      "start_line": 400,
+      "covered_end_line": 739,
+      "sha256": "aa94bc48928b4acdfca815f25085529783046dc4d13da939ce386a756a6b6d3a",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 4,
+      "path": "product/src/workbench/workbench.js",
+      "start_line": 1,
+      "covered_end_line": 200,
+      "sha256": "7de6fa9ba42f35baf3244519083a519471fb6767a7abb1316d8cd0f358a14116",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 4,
+      "path": "product/src/tasks/tasks.js",
+      "start_line": 1,
+      "covered_end_line": 60,
+      "sha256": "349eb19396195ff55cb36f5dae814b6f89053aceecd54e645d669b034dc059a6",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 6,
+      "path": "product/verify_product.py",
+      "start_line": 720,
+      "covered_end_line": 749,
+      "sha256": "cb21461c8cd840feb2e43f59cf6daff695dd8dcdeba601b3bae4d12dcaf69936",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 6,
+      "path": "product/src/tasks/tasks.js",
+      "start_line": 300,
+      "covered_end_line": 624,
+      "sha256": "349eb19396195ff55cb36f5dae814b6f89053aceecd54e645d669b034dc059a6",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 7,
+      "path": "product/src/tasks/tasks.js",
+      "start_line": 1,
+      "covered_end_line": 120,
+      "sha256": "349eb19396195ff55cb36f5dae814b6f89053aceecd54e645d669b034dc059a6",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 7,
+      "path": "product/main.js",
+      "start_line": 1,
+      "covered_end_line": 293,
+      "sha256": "458ee3d56050db9b7f4a3abaede6071fef87476a150c54d0fce97c2d52ff43a4",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": true,
+      "read_information_progress": false
+    },
+    {
+      "http": 9,
+      "path": "product/verify_product.py",
+      "start_line": 750,
+      "covered_end_line": 883,
+      "sha256": "aaf096410a413f870287f2725937f01efc643671857c3ec030ca1e178d98d199",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    },
+    {
+      "http": 9,
+      "path": "product/index.html",
+      "start_line": 1,
+      "covered_end_line": 66,
+      "sha256": "121ddf30d5598e24c65e75bfb55e70e7f18b552c2cf58afed90378c6ba72b90d",
+      "status": "succeeded",
+      "already_fully_in_current_request": false,
+      "already_fully_read_in_prior_tool_history": false,
+      "read_information_progress": true
+    }
+  ],
+  "current_request_full_range_duplicate_reads": 0,
+  "full_range_rereads_after_omission": 1,
+  "changed_files": [
+    "index.html",
+    "verify_product.py",
+    "src/tasks/tasks.test.js"
+  ],
+  "added_files": [],
+  "removed_files": [],
+  "elapsed_seconds": 200.41,
+  "formal_snapshot_unchanged": true,
+  "source_task_and_product_unchanged": true,
+  "worker_pid": 73713,
+  "source_service_pid": 31445,
+  "source_waiting_acceptance_version": 73,
+  "probe_task_state": [
+    "running",
+    "develop",
+    60
+  ],
+  "generated_product_manually_repaired": false,
+  "during_model_loop_human_intervention": false,
+  "limitations": [
+    "历史单样本比较，不是同时间重复 A/B，不能归因单个精简措施或证明稳定成功率",
+    "HTTP 9→11、读取 7→12，输出 Token 增加；不能声称调用次数或阅读更少",
+    "流程 Planner 的精简没有在本次开发范围触发，完整交付成本仍未验证",
+    "到真实提交后即停，未执行该新副本的完整浏览器、目标复审、finish 或用户验收",
+    "没有把该隔离副本替换到现有素材平台，源待验收实例保持"
+  ],
+  "trace_range": [
+    1264,
+    1335,
+    72
+  ],
+  "handoff_trace_refs": [
+    {
+      "sequence": 1331,
+      "detail_path": "traces/develop/7/001331-tool_result.json",
+      "tool": "run_unit_tests",
+      "status": "succeeded",
+      "call_id": "call_00_oc9mgSJ1wx2rO9rDHh6B1100"
+    },
+    {
+      "sequence": 1335,
+      "detail_path": "traces/develop/7/001335-tool_result.json",
+      "tool": "submit_unit_for_test",
+      "status": "succeeded",
+      "call_id": "call_00_tWsRx0PV786rFUsojEsT6873"
+    }
+  ],
+  "model_results": [
+    {
+      "http": 1,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 52088,
+        "completion_tokens": 4494,
+        "total_tokens": 56582,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 1280,
+        "prompt_cache_miss_tokens": 50808
+      }
+    },
+    {
+      "http": 2,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 57316,
+        "completion_tokens": 8042,
+        "total_tokens": 65358,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 7552,
+        "prompt_cache_miss_tokens": 49764
+      }
+    },
+    {
+      "http": 3,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 35005,
+        "completion_tokens": 1429,
+        "total_tokens": 36434,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 4992,
+        "prompt_cache_miss_tokens": 30013
+      }
+    },
+    {
+      "http": 4,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 50402,
+        "completion_tokens": 5245,
+        "total_tokens": 55647,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 7296,
+        "prompt_cache_miss_tokens": 43106
+      }
+    },
+    {
+      "http": 5,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 59025,
+        "completion_tokens": 9485,
+        "total_tokens": 68510,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 7296,
+        "prompt_cache_miss_tokens": 51729
+      }
+    },
+    {
+      "http": 6,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 24910,
+        "completion_tokens": 214,
+        "total_tokens": 25124,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 2816,
+        "prompt_cache_miss_tokens": 22094
+      }
+    },
+    {
+      "http": 7,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 29445,
+        "completion_tokens": 1025,
+        "total_tokens": 30470,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 7680,
+        "prompt_cache_miss_tokens": 21765
+      }
+    },
+    {
+      "http": 8,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 35318,
+        "completion_tokens": 11939,
+        "total_tokens": 47257,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 7680,
+        "prompt_cache_miss_tokens": 27638
+      }
+    },
+    {
+      "http": 9,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 24029,
+        "completion_tokens": 920,
+        "total_tokens": 24949,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 5760,
+        "prompt_cache_miss_tokens": 18269
+      }
+    },
+    {
+      "http": 10,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 28038,
+        "completion_tokens": 159,
+        "total_tokens": 28197,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 7680,
+        "prompt_cache_miss_tokens": 20358
+      }
+    },
+    {
+      "http": 11,
+      "provider": "deepseek",
+      "finish_reason": "tool_calls",
+      "usage": {
+        "prompt_tokens": 35416,
+        "completion_tokens": 91,
+        "total_tokens": 35507,
+        "prompt_tokens_details": "[REDACTED]",
+        "completion_tokens_details": "[REDACTED]",
+        "prompt_cache_hit_tokens": 2816,
+        "prompt_cache_miss_tokens": 32600
+      }
+    }
+  ],
+  "request_stats": [
+    {
+      "http": 1,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 2,
+      "payload_chars": 158336,
+      "carried_files": [
+        "product/index.html",
+        "product/main.js",
+        "product/product.test.js",
+        "product/product.test.js",
+        "product/src/tasks/tasks.js",
+        "product/src/tasks/tasks.js",
+        "product/src/tasks/tasks.test.js",
+        "product/src/tasks/tasks.test.js",
+        "product/styles.css",
+        "product/verify_product.py"
+      ],
+      "omitted_source_refs": 2,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 2,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 4,
+      "payload_chars": 178101,
+      "carried_files": [
+        "product/index.html",
+        "product/main.js",
+        "product/product.test.js",
+        "product/product.test.js",
+        "product/src/tasks/tasks.js",
+        "product/src/tasks/tasks.js",
+        "product/src/tasks/tasks.test.js",
+        "product/src/tasks/tasks.test.js",
+        "product/styles.css",
+        "product/verify_product.py"
+      ],
+      "omitted_source_refs": 2,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 3,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 2,
+      "payload_chars": 103887,
+      "carried_files": [
+        "product/index.html",
+        "product/main.js",
+        "product/product.test.js",
+        "product/product.test.js",
+        "product/src/tasks/tasks.test.js",
+        "product/src/tasks/tasks.test.js",
+        "product/styles.css"
+      ],
+      "omitted_source_refs": 5,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 4,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 6,
+      "payload_chars": 153644,
+      "carried_files": [
+        "product/index.html",
+        "product/main.js",
+        "product/product.test.js",
+        "product/product.test.js",
+        "product/src/tasks/tasks.test.js",
+        "product/src/tasks/tasks.test.js",
+        "product/styles.css"
+      ],
+      "omitted_source_refs": 5,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 5,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 9,
+      "payload_chars": 184083,
+      "carried_files": [
+        "product/index.html",
+        "product/main.js",
+        "product/product.test.js",
+        "product/product.test.js",
+        "product/src/tasks/tasks.test.js",
+        "product/src/tasks/tasks.test.js",
+        "product/styles.css"
+      ],
+      "omitted_source_refs": 5,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 6,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 2,
+      "payload_chars": 70877,
+      "carried_files": [
+        "product/index.html",
+        "product/verify_product.py"
+      ],
+      "omitted_source_refs": 11,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 7,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 5,
+      "payload_chars": 85792,
+      "carried_files": [
+        "product/index.html",
+        "product/verify_product.py"
+      ],
+      "omitted_source_refs": 11,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 8,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 8,
+      "payload_chars": 105263,
+      "carried_files": [
+        "product/index.html",
+        "product/verify_product.py"
+      ],
+      "omitted_source_refs": 11,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 9,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 2,
+      "payload_chars": 68348,
+      "carried_files": [
+        "product/verify_product.py"
+      ],
+      "omitted_source_refs": 12,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 10,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 5,
+      "payload_chars": 82261,
+      "carried_files": [
+        "product/verify_product.py"
+      ],
+      "omitted_source_refs": 12,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": null
+    },
+    {
+      "http": 11,
+      "model": "deepseek-flash",
+      "thinking": {
+        "type": "enabled"
+      },
+      "message_count": 7,
+      "payload_chars": 99450,
+      "carried_files": [
+        "product/verify_product.py"
+      ],
+      "omitted_source_refs": 12,
+      "objective_ids": [
+        "E4-1",
+        "E6-1"
+      ],
+      "old_failure_content_source": "read_on_demand",
+      "self_test_result_ref": {
+        "call_id": "call_00_oc9mgSJ1wx2rO9rDHh6B1100",
+        "content_source": "tool_message"
+      }
+    }
+  ],
+  "initial_reproduction": {
+    "command": [
+      "node",
+      "--test",
+      "product.test.js",
+      "src/materials/materials.test.js",
+      "src/topics/topics.test.js",
+      "src/tasks/tasks.test.js",
+      "src/workbench/workbench.test.js"
+    ],
+    "exit_code": 1,
+    "counts": {
+      "tests": 86,
+      "pass": 84,
+      "fail": 2,
+      "skipped": 0
+    },
+    "failures": [
+      "✖ index.html 引用 styles.css 并以 type=module 加载 main.js，且四个主要页面区域存在 (0.745333ms)",
+      "✖ 视图：校验失败路径只更新提示文本与列表区，不重建表单 DOM（已填写内容保留） (0.693ms)",
+      "✖ failing tests:",
+      "✖ index.html 引用 styles.css 并以 type=module 加载 main.js，且四个主要页面区域存在 (0.745333ms)",
+      "✖ 视图：校验失败路径只更新提示文本与列表区，不重建表单 DOM（已填写内容保留） (0.693ms)"
+    ]
+  },
+  "initial_sandbox_probe": {
+    "counts": {
+      "tests": 86,
+      "pass": 82,
+      "fail": 4,
+      "skipped": 0
+    },
+    "additional_failures": "两项本机监听 EPERM，解除沙箱限制后仅余原两项失败；无 API 调用"
+  },
+  "code_sha256": {
+    "backend/app/runtime/model.py": "33a61005a45963d4482470af85e6777247916f2cecaff84eb47ba1c9f40e64fe",
+    "backend/app/runtime/worker.py": "f73dc42993a03c5ac32f444a8c7baed20605c19226ebfb31af310717da08491f",
+    "backend/app/runtime/context_relay.py": "2dac5194901eb56d4b6ee39686d081830916f43983a8328e95d412b10587d4d6",
+    "backend/app/runtime/slice_workflow.py": "ef273f1092b055a9bcfd42ef04932c8e48a782e5aeb6508ce20d13ccaa78d832"
+  },
+  "generated_product_change_review": {
+    "changed_files": [
+      "index.html",
+      "verify_product.py",
+      "src/tasks/tasks.test.js"
+    ],
+    "production_business_js_unchanged": true,
+    "product_test_js_unchanged": true,
+    "tasks_test_change": "成功保存的预期新增一次提示；同时核对成功文本、必填提示清除、数据保存与表单对象保持",
+    "browser_script_change": "新增错误输入恢复和首次图标加载的真实操作断言；未删除原流程、放宽预期或加入 skip；本次未执行完整浏览器",
+    "icon_change": "保留内联 SVG、编码空格及显式 32 尺寸，改注释避开旧全 HTML 路径字符串断言",
+    "remaining_test_limitation": "旧图标 Node 用例仍搜索全 HTML 的资源字符串，模型以改注释和格式满足，不称该用例已改成真实网络资源判断"
+  },
+  "probe_setup_notes": [
+    "准备期只读字段查询误用 protocol_entries，改为实际 checkpoint_entries，未调用模型或影响状态",
+    "初始 Node 统计先只识别 TAP # 行，实际默认 reporter 使用 ℹ；按实际格式核对且保留原输出",
+    "只读 Trace 查询误用 ORM 属性 metadata_json；核对模型映射后使用 SQLite 实际列 metadata，无任务修改"
+  ]
+}

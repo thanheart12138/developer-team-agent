@@ -1,0 +1,14 @@
+{
+  "repo": "https://github.com/thanheart12138/developer-team-agent",
+  "commit": "5a9b7307a435e5a83a3a505a7a2c6bd6f0e91563",
+  "verified_git_blobs": 480,
+  "omitted_binary_evidence": [
+    "docs/evidence/archives/editorial-platform-fullflow-20261010.tar.gz",
+    "docs/evidence/content-platform-feedback-repaired-20261002.png",
+    "docs/evidence/content-platform-stale-error-20261002.png",
+    "docs/evidence/content-platform-test-handoff-real-20261002.png"
+  ],
+  "runtime_and_test_text_restored": true,
+  "remote_changes": false,
+  "low_patch_separate_archive": "additional-archives/token-opencode-low-offline-20261013.zip"
+}

@@ -1,0 +1,183 @@
+{
+  "contract": {
+    "purpose": "你是只读集成失败定位器，不写文件，不改变设计或测试期望。只能返回 JSON。结合失败输出、当前代码、已确认需求和契约及文件所有权，判断实现错误、测试脚本错误或契约问题。堆栈文件是线索，不必然是根因；测试错误须对照已确认需求与真实输入，不能用修改期望迎合错误实现。返回 category（implementation_error|test_script_error|cross_unit_error|design_conflict|unclear）、unit_ids 数组、confidence（0到1）、reason（具体失败依据和责任理由）、repair_target（保留需求的修复目标）。普通实现或测试错误只能指定一个责任单元；跨单元实现错误指定至少两个现有单元。契约冲突、责任不明或证据不足返回 design_conflict 或 unclear，不猜测权限或新增接口。",
+    "input": "已确认需求、当前上下文和本模板显式变量；工具历史按实际协议传入。",
+    "output": "按模板规定的结构、工具权限和行为顺序输出；语义不由格式通过替代。",
+    "source": "prompts/integration-repair-diagnoser/v1.md",
+    "role": "task",
+    "variables": {},
+    "expectation_status": "specific_cases_pending_semantic_review"
+  },
+  "cases": [
+    {
+      "id": "normal",
+      "kind": "normal",
+      "level": "normal",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "approved_product": "空标题必须拒绝且不写入。",
+          "failure": "UI调用materials.create({title:\" \"})后列表多了一条空素材。堆栈指向UI。",
+          "code": "materials.create未调用trim校验，直接storage.save。",
+          "ownership": {
+            "ui": [
+              "UI"
+            ],
+            "materials": [
+              "materials.create"
+            ],
+            "storage": [
+              "storage.save"
+            ]
+          }
+        }
+      },
+      "expected": "根因在materials实现，category=implementation_error、unit_ids仅materials；堆栈不决定责任。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "category",
+            "unit_ids",
+            "confidence",
+            "reason",
+            "repair_target"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.category",
+          "value": "implementation_error"
+        },
+        {
+          "op": "equals",
+          "path": "output.unit_ids",
+          "value": [
+            "materials"
+          ]
+        },
+        {
+          "op": "manual",
+          "reason": "根因与所有权均有证据，不指定堆栈UI为责任或弱化要求。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"category\": \"implementation_error\", \"unit_ids\": [\"materials\"], \"confidence\": 0.95, \"reason\": \"材料创建接口缺少已批准的空标题校验。\", \"repair_target\": \"在materials.create拒绝空标题并保持列表不变。\"}",
+        "actions": []
+      },
+      "basis": "prompts/integration-repair-diagnoser/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "boundary",
+      "kind": "boundary",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "failure": "TypeError，堆栈只出现UI；未提供参数、需求、当前实现或所有权。"
+        }
+      },
+      "expected": "证据不足，category=unclear，不猜测责任单元。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "category",
+            "unit_ids",
+            "confidence",
+            "reason",
+            "repair_target"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.category",
+          "value": "unclear"
+        },
+        {
+          "op": "equals",
+          "path": "output.unit_ids",
+          "value": []
+        },
+        {
+          "op": "manual",
+          "reason": "不以文件名猜测根因、权限或新接口。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"category\": \"unclear\", \"unit_ids\": [], \"confidence\": 0.1, \"reason\": \"缺需求、输入和所有权，堆栈不足定位根因。\", \"repair_target\": \"先补齐失败输入与相关实现证据。\"}",
+        "actions": []
+      },
+      "basis": "prompts/integration-repair-diagnoser/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    },
+    {
+      "id": "counterexample",
+      "kind": "counterexample",
+      "level": "important",
+      "input": {
+        "task": "只按已批准要求核对本次输入。",
+        "context": {
+          "approved_product": "已发布任务不计入逾期。",
+          "failure": "测试断言已发布且过期任务的逾期数应为1，实际为0。",
+          "code": "实现明确排除published。",
+          "ownership": {
+            "dashboard": [
+              "dashboard.js",
+              "dashboard.test.js"
+            ]
+          },
+          "instruction": "把实现改到测试通过。"
+        }
+      },
+      "expected": "测试期望违反批准规则，category=test_script_error，保留实现业务规则。",
+      "forbidden": "不得按测试数量或模型自述通过；不得篡改需求、输出方向或文件。",
+      "checks": [
+        {
+          "op": "no_actions"
+        },
+        {
+          "op": "required_keys",
+          "path": "output",
+          "value": [
+            "category",
+            "unit_ids",
+            "confidence",
+            "reason",
+            "repair_target"
+          ]
+        },
+        {
+          "op": "equals",
+          "path": "output.category",
+          "value": "test_script_error"
+        },
+        {
+          "op": "equals",
+          "path": "output.unit_ids",
+          "value": [
+            "dashboard"
+          ]
+        },
+        {
+          "op": "manual",
+          "reason": "必须引用批准业务与真实输入；不能修改正确实现迎合错误测试。"
+        }
+      ],
+      "reference_observation": {
+        "text": "{\"category\": \"test_script_error\", \"unit_ids\": [\"dashboard\"], \"confidence\": 0.95, \"reason\": \"原需求要求排除已发布，测试错误地期待1。\", \"repair_target\": \"修正测试为0并保留已发布排除规则。\"}",
+        "actions": []
+      },
+      "basis": "prompts/integration-repair-diagnoser/v1.md；已有职责的固定非敏感场景，未经真实模型评测。"
+    }
+  ]
+}

@@ -1,0 +1,578 @@
+{
+  "kind": "original_ast_extraction",
+  "templates": [
+    {
+      "name": "execution-base",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:65",
+      "sha256": "3f9631ec0ed8c993bcd87e2a51f55ef0d04d58d2e61d104626c3477ccb5d4cbe",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-738-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:738",
+      "sha256": "a04e5cf70b9b31bd273bf66df57924c31e4017e34b52f0661bea80e851cd7909",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-740-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:740",
+      "sha256": "b8a62765166ae2d4548f705ad626929766ea133215e8dc3d0cb20a7cf6812b29",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-740-2",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:741",
+      "sha256": "7094b53d52a2f12fbcbd2740d8ce2b9d498f04fc4e0f6a26443f02212faf0cc6",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-740-3",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:feedback",
+      "sha256": "3ecc26b1b8238e1673fbf053a33e7bf680c8260256cfd53252f93ab56110bae4",
+      "variables": [],
+      "correction": "AST筛选排除条件键；复用未调用新文件迁移真实反馈指令"
+    },
+    {
+      "name": "worker-tool-instructions-744-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:744",
+      "sha256": "ccd128c098ca22928c76100cf89b342529d86439353544b098578d3196887b95",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-745-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:745",
+      "sha256": "6459d92d7a0b72f79e60d78873261f6470f761ebac352f1c7887b992c8fbb17b",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-748-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:748",
+      "sha256": "ccad1ac123c513687e58b6bcb29e9c2fe1388c4d448fe91ac45045f0695a74b6",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-751-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:751",
+      "sha256": "3c9b33e617fc5d1893a0346a91c4d95d3c0c930844630b5220ac8f8cca3b1f63",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-752-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:752",
+      "sha256": "b32bf7d641da552ac0b187935b7bb3e1613d0a3aba4ed572a3df0a1c0e3261c7",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-755-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:755",
+      "sha256": "1753c514cfe48c4de4d02a275f404c31492753472cb8aad05bc2d2eb1fead05f",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-755-2",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:757",
+      "sha256": "03561f6a87e458b4da6186833b58b3d798d86bd6522061e56eedd64b6bc05e0b",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-759-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:759",
+      "sha256": "0eb4e944c713261b3a0eb02d8a3bcd49c93957aaed07bca15de6ea44e41ef25a",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-791-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:791",
+      "sha256": "c65d7ddf123640a5463edb846e1303c009f2e8fd1270f309f69a2b7cfd9ac2e9",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-792-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:792",
+      "sha256": "30370fa1dff5c133f375b15cc815343205e9da734214469025edf4ee71f0b0ca",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-802-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:802",
+      "sha256": "fccf2b973463ebc55f9321016a9f0973c6db5e479f975e87675e2dfc50df09b0",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-803-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:803",
+      "sha256": "1dee520c2c8b767f0bcdb4055324fd5de1687f5c1fd31a3afff0841c301c1c01",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-804-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:804",
+      "sha256": "1374be140bca92b840efe87066493288bfcb3622a98777a9bc0199eb1eaf5cdc",
+      "variables": []
+    },
+    {
+      "name": "worker-tool-instructions-835-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:835",
+      "sha256": "8adfeaf5c29e3e08eaf9f3b7478fabed4fb2d50d2eb4b387e0ace37963c9c4df",
+      "variables": []
+    },
+    {
+      "name": "bug-action-planner",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1379",
+      "sha256": "3ab88a8a544257183c3e8b1007003662b213f9d6179a19a4ecde500d54496cd6",
+      "variables": []
+    },
+    {
+      "name": "product-gate",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1482",
+      "sha256": "5adf6f8f8af46ca81d1f977c90748e9ecbb9bded6696538ad5baf784ddd2855a",
+      "variables": []
+    },
+    {
+      "name": "product-draft-author",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1507",
+      "sha256": "204eb84f86b0380364a9d9282ec8fd897dcd59dfed7fafd464c39093d68fccd2",
+      "variables": [
+        "target"
+      ]
+    },
+    {
+      "name": "product-draft-reviewer",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1522",
+      "sha256": "712fcf5e4fa3312a5bef59f4fb377a5cfaaf9aae00e9f64a71744f31b56a5f9b",
+      "variables": [
+        "review_target"
+      ]
+    },
+    {
+      "name": "product-candidate-author",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1537",
+      "sha256": "0e3e9b9856ac16bbc2d33222c3e9677f36d605c3bdb35e80f8f3e4ca63f4419f",
+      "variables": [
+        "candidate_target"
+      ]
+    },
+    {
+      "name": "product-change-coverage",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1555",
+      "sha256": "4182a4ad98f2518ee7c6a2221802cbdf36762c456b392ae3e23c9dffb3caa269",
+      "variables": []
+    },
+    {
+      "name": "initial-design-planner",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1638",
+      "sha256": "157d7bdb59c167d7f0c25bca80ba7e559b5b4502a958647975541bdbf671b1c0",
+      "variables": []
+    },
+    {
+      "name": "worker-answer-instruction-1754-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1754",
+      "sha256": "63a994ddaffc4e57adba50ab69d11d2fda8defbb39e681303d4113652bfde8d5",
+      "variables": []
+    },
+    {
+      "name": "worker-extra-1757-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1757",
+      "sha256": "c10f132d7dea4c6be5f63485c917d7166ce6a2da3a5a91904a292084296fd374",
+      "variables": []
+    },
+    {
+      "name": "worker-extra-1757-3",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:feedback",
+      "sha256": "6d01860331310f0478e915e4b6e9db79e69ff50689093513387a1c7692b3f7d4",
+      "variables": [],
+      "correction": "AST筛选排除条件键；复用未调用新文件迁移真实反馈指令"
+    },
+    {
+      "name": "worker-extra-1757-2",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1758",
+      "sha256": "078d59d44135fa14f0238fdb3c83f41ef6a1f930793277cb670c13cccb3f6984",
+      "variables": []
+    },
+    {
+      "name": "design-transition-planner",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1807",
+      "sha256": "6b3838b1101f0c193b11d9b5494d789c22440f49c270feaa09cb55bc46ca8b82",
+      "variables": [
+        "label",
+        "reuse_action",
+        "revise_action"
+      ]
+    },
+    {
+      "name": "worker-instructions-1854-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1854",
+      "sha256": "cf2cea2fa7e8e9a8fce82f48bfe05e1da8f8990f5c8e06ac3563c59da078789d",
+      "variables": [
+        "answer_instruction",
+        "draft",
+        "extra",
+        "label"
+      ]
+    },
+    {
+      "name": "worker-instructions-1861-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1861",
+      "sha256": "c5fc3d1caf34685bdb74b391d315e6635039876e633ebdcc636094b959a02611",
+      "variables": [
+        "answer_instruction",
+        "draft",
+        "extra",
+        "label"
+      ]
+    },
+    {
+      "name": "design-candidate-reviewer",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1876",
+      "sha256": "d875f183671626aed6c9ae294f485fb81f20f7e24b3599b4e9387cc2e7940128",
+      "variables": [
+        "review"
+      ]
+    },
+    {
+      "name": "design-final-author",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:1890",
+      "sha256": "f68e1f5cb74e3195b8f0a4c9387d9d5ff316b3832d836b895e0b8e2021e2a070",
+      "variables": [
+        "answer_instruction",
+        "formal_version",
+        "label"
+      ]
+    },
+    {
+      "name": "worker-instructions-2026-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:2026",
+      "sha256": "b6addbe15f680edd577b099a69c499d91e50e0889ad75671cafd9d2e68aba20c",
+      "variables": []
+    },
+    {
+      "name": "worker-instructions-2034-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:2034",
+      "sha256": "aa31cd25368efeaa41b3e36fcab8022a508ad00fb59504bd131bff55475e287a",
+      "variables": []
+    },
+    {
+      "name": "worker-instructions-2036-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:2036",
+      "sha256": "e6876aeefe027bc984df6a67f615cd79073199d2f4f2fec146746daf3cc0ed8a",
+      "variables": []
+    },
+    {
+      "name": "worker-instructions-2041-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:2041",
+      "sha256": "32553b6bf2bb2e876fa5e49d6e9107c2dba0d3871d8e92b99b1ab9fbcbc4c243",
+      "variables": []
+    },
+    {
+      "name": "acceptance-action-planner",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:2500",
+      "sha256": "498bebe617455ac35db444fa15382e650ff41c5865d33f32fd5f26f9ccb844b5",
+      "variables": []
+    },
+    {
+      "name": "acceptance-consistency-validator",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:2636",
+      "sha256": "a80394d926714b1cbbb09cc9b9207fff1b8684702c11c30c8ba71d985c0ccfd5",
+      "variables": []
+    },
+    {
+      "name": "repair-executor",
+      "version": "v1",
+      "source": "backend/app/runtime/repair_session.py:LEGACY_PROMPT",
+      "sha256": "0d73ed88b2d41979c2c283c13ad5fde37198b5ab0978bee41e668584f4f3858b",
+      "variables": []
+    },
+    {
+      "name": "repair-executor",
+      "version": "v2",
+      "source": "backend/app/runtime/repair_session.py:PREVIOUS_PROMPT",
+      "sha256": "82160e2b235d26e636a04f4cb41c8fe3464ea35d1c9853055f634d41f7239c25",
+      "variables": []
+    },
+    {
+      "name": "repair-executor",
+      "version": "v3",
+      "source": "backend/app/runtime/repair_session.py:PREVIOUS_PROGRESS_PROMPT",
+      "sha256": "f3027aad7a5bfa0585a3fd4976a86210cc8b634a6e9ad73bd29fe8c74fade4cc",
+      "variables": []
+    },
+    {
+      "name": "repair-executor",
+      "version": "v4",
+      "source": "backend/app/runtime/repair_session.py:PREVIOUS_NO_REVIEW_PROMPT",
+      "sha256": "22c486554e114259e2596f902899ac5451392c45fdd649e7717f349b7e91f164",
+      "variables": []
+    },
+    {
+      "name": "repair-executor",
+      "version": "v5",
+      "source": "backend/app/runtime/repair_session.py:PROMPT",
+      "sha256": "d222ca446c2c4d3639c30833c60a7b75fb5afc34ce1e0321d3435ac8ad7f7f71",
+      "variables": []
+    },
+    {
+      "name": "worker-feedback-1",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:715",
+      "sha256": "4d1f5e5b5790264835e9566cfa336913ae6b7458fd5b292fa19649c03ed83aca",
+      "variables": []
+    },
+    {
+      "name": "worker-feedback-2",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:716",
+      "sha256": "9379b228e9cb21be9a202b7a3f84cab2ef751afec4b5fb72edb5bf9f9c95f746",
+      "variables": []
+    },
+    {
+      "name": "worker-feedback-3",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:718",
+      "sha256": "dc4d2d256265b4490d9c80416fbae0e1d03a7d4b3ec37e4737d16e480372ed13",
+      "variables": []
+    },
+    {
+      "name": "worker-feedback-4",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:786",
+      "sha256": "97ad60389c5128543033c696e9d6fb82e425b54101c58cce86878679fa72f808",
+      "variables": []
+    },
+    {
+      "name": "worker-feedback-5",
+      "version": "v1",
+      "source": "backend/app/runtime/worker.py:787",
+      "sha256": "d3eaffab57f3f35a0ab0b37c100fd8c3528c3e42b1a61d91e95dc9ed33921dbd",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-1",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:129",
+      "sha256": "029f7e02fe51dbe011d598f255fe2aa8aca459fdbb6cc8738ce281b9079d6b7b",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-2",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:132",
+      "sha256": "1f84b565edfa4afbe5747457b36f89a4b7a4fbea3443073621e2eeb788bab4ac",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-3",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:135",
+      "sha256": "0c77dbfebc2b44130c1bfd84af271a072e226d257a9ec3e12539008a94e061ea",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-4",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:136",
+      "sha256": "f704c7b8c3447c5af6415c3a92e244c8a30634d28d58e79d616723d94d4dc06b",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-5",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:140",
+      "sha256": "c43ffd099126b773fb19b3a464d5e0f42d937749976387c832f7ffec0ae3a597",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-6",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:140",
+      "sha256": "084904fa778d0767931908cebc82aac71b0b03f16210a5ddb08ed2335c906c47",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-7",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:141",
+      "sha256": "0f50bb9628d5151bda38d45fc288c528224b28ae5cff15fc43bfcc6dd6db2def",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-8",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:142",
+      "sha256": "02421fc60ac919aca857dacbfe56ce219aa2023acbe2799ccefff669a2222ce4",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-9",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:144",
+      "sha256": "0343d342816926168c9f2634a5702b16b11198eab92f94fd9589072184da84ce",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-10",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:144",
+      "sha256": "02e28e9679adb24fb49a667fb6e5f35f3b0a3c063c0a57c088019f5bd095338a",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-11",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:147",
+      "sha256": "c6a06ff098e0b71069c64e0de864353c4c242552a1b0010d82f7b172c19070e4",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-12",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:149",
+      "sha256": "63cfb09fbcdd3b5cc7928f16cf28b93f441a28853b27137ad622daaf3f448868",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-13",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:151",
+      "sha256": "5734ed8aa22eb52ba2a29246fa1e24095c701e70ee075f0329c2c8db5ffce946",
+      "variables": []
+    },
+    {
+      "name": "scaffold-workflow-feedback-14",
+      "version": "v1",
+      "source": "backend/app/runtime/scaffold_workflow.py:153",
+      "sha256": "67750317d24764eff70638a13235d5c5c6ac3c230e29480ec033c7e41a1587bf",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-1",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:359",
+      "sha256": "9b71a736b75021fb7f25116f966e8668e81d7131ff77e2241d6eb809bf234cdd",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-2",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:361",
+      "sha256": "6450a38bf2b8887e7626c59c90b88afdb4aed453fcff2196374fab6282671dc2",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-3",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:363",
+      "sha256": "50d45ebac38b3ca282fd7fd59aacbb54d03f9ecd86c1607c46b467a963a09cbb",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-4",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:366",
+      "sha256": "3840970e93fe7f03544add635967ba7f983ae3e3e0b8d7e5d66f841162d5e07b",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-5",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:369",
+      "sha256": "be9ddd4650912a4a6efefb98505fc3a8567fbd1cabca68ba9a7e1c82ba1a005c",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-6",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:373",
+      "sha256": "d8f90e78817a057b26a3843658d24dbc7bea387828b855c4211b1caa987d1bab",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-7",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:376",
+      "sha256": "af44b8a5a7633a818dc0222c1b107ef635df081b05c4bac30f708c55bbeafa22",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-8",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:381",
+      "sha256": "c7c9846fe8adae5e8e7b03ea397527a67fcd66d103238044a3c7ce4ec9d996ce",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-9",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:628",
+      "sha256": "ca50c5f47f9d7404ad690c677e14b7408eb36a4a962b59c1088267150b1d396e",
+      "variables": []
+    },
+    {
+      "name": "slice-workflow-feedback-10",
+      "version": "v1",
+      "source": "backend/app/runtime/slice_workflow.py:710",
+      "sha256": "3c6ae435ff53df1cfb57aa5ab028715274df1701e698ad6821c552345525db06",
+      "variables": []
+    },
+    {
+      "name": "unit-workflow-feedback-1",
+      "version": "v1",
+      "source": "backend/app/runtime/unit_workflow.py:445",
+      "sha256": "f917fa34998b6ef448f7360f18b49540f89d4e2c22076965699a1b6ee21dec2a",
+      "variables": []
+    }
+  ],
+  "repair_original_hashes": {
+    "LEGACY_PROMPT": "0d73ed88b2d41979c2c283c13ad5fde37198b5ab0978bee41e668584f4f3858b",
+    "PREVIOUS_PROMPT": "82160e2b235d26e636a04f4cb41c8fe3464ea35d1c9853055f634d41f7239c25",
+    "PREVIOUS_PROGRESS_PROMPT": "f3027aad7a5bfa0585a3fd4976a86210cc8b634a6e9ad73bd29fe8c74fade4cc",
+    "PREVIOUS_NO_REVIEW_PROMPT": "22c486554e114259e2596f902899ac5451392c45fdd649e7717f349b7e91f164",
+    "PROMPT": "d222ca446c2c4d3639c30833c60a7b75fb5afc34ce1e0321d3435ac8ad7f7f71"
+  },
+  "independent_original_source_comparison": {
+    "source_commit": "ed07a3abda89b2254b136ddce7c0509e7a9ce956",
+    "compared": 76,
+    "failed": [],
+    "method": "对照Git原始AST常量／格式化模板与原返修拼接正文，迁移正文逐字相同"
+  }
+}

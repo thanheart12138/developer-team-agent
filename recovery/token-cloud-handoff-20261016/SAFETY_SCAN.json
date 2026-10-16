@@ -1,0 +1,5 @@
+{
+  "high_confidence_secret_pattern_hits": 0,
+  "scan": "private-key headers, provider token prefixes, long literal credential assignments; filename exclusions; UTF-8 only",
+  "limitations": "Pattern scanning does not prove absence of every possible secret. No secret values printed. Source prompt templates retained; raw request archives and logs excluded."
+}

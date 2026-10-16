@@ -1,0 +1,126 @@
+[
+  {
+    "path": "README.md",
+    "status": "modified"
+  },
+  {
+    "path": "ROADMAP.md",
+    "status": "modified"
+  },
+  {
+    "path": "backend/app/config.py",
+    "status": "modified"
+  },
+  {
+    "path": "backend/app/runtime/contracts.py",
+    "status": "modified"
+  },
+  {
+    "path": "backend/app/runtime/controlled_transport.py",
+    "status": "added"
+  },
+  {
+    "path": "backend/app/runtime/live_token_transport.py",
+    "status": "added"
+  },
+  {
+    "path": "backend/app/runtime/model.py",
+    "status": "modified"
+  },
+  {
+    "path": "backend/app/runtime/opencode.py",
+    "status": "modified"
+  },
+  {
+    "path": "backend/app/runtime/response_evidence.py",
+    "status": "added"
+  },
+  {
+    "path": "backend/app/runtime/sse_response_evidence.py",
+    "status": "added"
+  },
+  {
+    "path": "backend/app/runtime/task_budget.py",
+    "status": "added"
+  },
+  {
+    "path": "backend/app/runtime/token_lineage.py",
+    "status": "added"
+  },
+  {
+    "path": "backend/app/runtime/token_offline_runner.py",
+    "status": "added"
+  },
+  {
+    "path": "backend/app/runtime/token_transport.py",
+    "status": "added"
+  },
+  {
+    "path": "backend/app/runtime/worker.py",
+    "status": "modified"
+  },
+  {
+    "path": "docs/DEV_DESIGN.md",
+    "status": "modified"
+  },
+  {
+    "path": "docs/INTERVIEW_GUIDE.md",
+    "status": "modified"
+  },
+  {
+    "path": "docs/architecture-issues/005-prompt-governance-and-cost-attribution.md",
+    "status": "modified"
+  },
+  {
+    "path": "docs/evidence/opencode-deepseek-low-offline-20261013.md",
+    "status": "added"
+  },
+  {
+    "path": "docs/evidence/token-budget-migration-20261015.md",
+    "status": "added"
+  },
+  {
+    "path": "docs/evidence/token-controlled-transport-20261015.md",
+    "status": "added"
+  },
+  {
+    "path": "docs/evidence/token-offline-continuity-20261015.md",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_controlled_transport.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_live_token_transport.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_opencode.py",
+    "status": "modified"
+  },
+  {
+    "path": "tests/test_task_budget.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_token_lineage.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_token_offline_runner.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_token_recovery_continuation.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_token_response_evidence.py",
+    "status": "added"
+  },
+  {
+    "path": "tests/test_token_transport.py",
+    "status": "added"
+  }
+]

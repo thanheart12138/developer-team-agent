@@ -1,0 +1,17 @@
+{
+  "purpose": "Public source handoff; not merged with Mac changes",
+  "base_commit": "5a9b7307a435e5a83a3a505a7a2c6bd6f0e91563",
+  "redacted_paths": [
+    "candidate/ROADMAP.md",
+    "candidate/docs/evidence/context-slimming-delivery-real-20261003.json",
+    "candidate/docs/evidence/calculator-rounding-repair-real-20261003.json",
+    "candidate/docs/evidence/material-platform-rebuild-real-20261003.json",
+    "candidate/docs/evidence/formal-service-recovery-20261003.json",
+    "candidate/docs/evidence/calculator-rounding-repair-blocked-20261003.json",
+    "candidate/docs/evidence/sandbox-integration-20261008.md",
+    "HANDOFF_README.md"
+  ],
+  "tests_or_model_api_run": false,
+  "scan": "UTF-8 text only; no credentials, raw request archives, personal emails or private keys detected. Credential-like literals inspected as synthetic offline fixtures. Personal local account paths replaced. Pattern scanning cannot prove absence of all secrets.",
+  "source_provenance_hashes": "Historical original source hashes; current public content hashes are in SHA256SUMS.json"
+}

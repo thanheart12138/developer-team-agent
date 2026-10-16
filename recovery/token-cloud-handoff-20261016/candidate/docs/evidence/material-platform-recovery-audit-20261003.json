@@ -1,0 +1,97 @@
+{
+  "date": "2026-10-03",
+  "checked_at": "2026-10-03T19:05:21.286101+08:00",
+  "target": "素材管理平台原隔离版本 73 与中断 Planner 实验的恢复",
+  "scope": "只读检查持久存储元数据及目标会话输出，保存经原哈希验证的源码副本",
+  "docker_audit": {
+    "existing_container_count": 12,
+    "mounts_and_compose_paths_checked_for_all_existing_containers": true,
+    "original_material_experiment_mount_found": false,
+    "volumes": [
+      "deploy_mysql_data",
+      "deploy_shared_data",
+      "wechat_video_mysql_data"
+    ],
+    "volume_metadata_checked": true,
+    "unrelated_business_volume_contents_searched": false,
+    "formal_mysql_is_not_isolated_material_sqlite": true
+  },
+  "local_snapshot_audit": {
+    "command": "tmutil listlocalsnapshots /",
+    "exit_code": 0,
+    "listed_snapshots": []
+  },
+  "source_recovery": {
+    "date": "2026-10-03",
+    "target": "素材管理平台原隔离版本 73",
+    "reference": "docs/evidence/content-platform-objective-finish-real-20261002.json",
+    "reference_sha256": "07f0c11b19354a998a176c237f341351edde31eb727db009f4fabb24e3fb6a37",
+    "expected_file_count": 20,
+    "searched_session_count": 14,
+    "recovered_file_count": 2,
+    "files": {
+      "styles.css": {
+        "sha256": "3fe7f65b9bc0cbb71bba5695db0ce05a5e347b09db67593a5269dda62cbf3f11",
+        "bytes": 1218,
+        "source": "2026/09/24/rollout-2026-09-24T15-25-06-01a0d24d-c3ed-7bf2-a794-d4459beff0dd.jsonl:13745[1].text.json.output",
+        "method": "suffix_byte:7678"
+      },
+      "src/app/app.orchestrator.js": {
+        "sha256": "b0a0158a96b9289347ea0c49aa5629a7a4d9e125e73f434984598d4b7737547c",
+        "bytes": 6928,
+        "source": "2026/09/24/rollout-2026-09-24T15-25-06-01a0d24d-c3ed-7bf2-a794-d4459beff0dd.jsonl:15006[2].text.json.output",
+        "method": "suffix_byte:1499"
+      }
+    },
+    "missing_files": [
+      "README.md",
+      "implementation.md",
+      "index.html",
+      "main.js",
+      "product.test.js",
+      "src/materials/materials.js",
+      "src/materials/materials.test.js",
+      "src/shared/shared.js",
+      "src/shared/shared.test.js",
+      "src/storage/storage.js",
+      "src/storage/storage.test.js",
+      "src/tasks/tasks.js",
+      "src/tasks/tasks.test.js",
+      "src/topics/topics.js",
+      "src/topics/topics.test.js",
+      "src/workbench/workbench.js",
+      "src/workbench/workbench.test.js",
+      "verify_product.py"
+    ],
+    "complete_product_recovered": false,
+    "original_sqlite_trace_checkpoint_recovered": false,
+    "new_model_http_calls": 0,
+    "original_interrupted_budget_reset": false,
+    "limits": [
+      "只能恢复会话输出中出现过的完整字节，缺失文件不能从哈希反推。",
+      "源码恢复不等于原任务状态、历史协议或调用预算恢复。"
+    ]
+  },
+  "recovery_root": "workspace/experiments/material-platform-recovery-20261003",
+  "independent_hash_verification": {
+    "passed": true,
+    "matched_original_files": 2,
+    "expected_original_files": 20
+  },
+  "original_task_sqlite_recovered": false,
+  "original_trace_checkpoint_recovered": false,
+  "original_interrupted_final_usage_confirmed": false,
+  "can_start_original_platform": false,
+  "can_resume_original_checkpoint": false,
+  "new_tested_model_http_calls": 0,
+  "original_interrupted_budget_reset": false,
+  "formal_database_mutated": false,
+  "original_generated_product_modified": false,
+  "new_task_created": false,
+  "user_accepted": false,
+  "limits": [
+    "Docker 核查仅涉及挂载和卷元数据，未检索无关业务卷内部文件。",
+    "会话恢复只接受原哈希一致的完整字节，未补写缺失代码。",
+    "具体临时目录清理原因仍未知，启动时间不能单独证明清理机制。"
+  ]
+}
